@@ -28,8 +28,9 @@ process FETCH_REPEAT_MODEL {
     tuple val(species_name), val(gca), path(genome_file), path("${gca}.repeatmodeler.fa")
     script:
     """
-    # Construct the URL for the repeat model file
-    REPEAT_URL="${params.repeats_ftp_base}/${species_name}/${gca}.repeatmodeler.fa"
+    # Normalize species name: capitalize first letter of genus, lowercase species epithet
+    SPECIES_NORMALIZED=\$(echo "${species_name}" | awk -F'_' '{print toupper(substr(\$1,1,1)) tolower(substr(\$1,2)) "_" tolower(\$2)}')
+    REPEAT_URL="${params.repeats_ftp_base}/\${SPECIES_NORMALIZED}/${gca}.repeatmodeler.fa"
 
     # Check if the file exists on the server and download if available
     if curl --silent --fail --output "${gca}.repeatmodeler.fa" "\$REPEAT_URL"; then

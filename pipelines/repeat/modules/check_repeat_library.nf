@@ -28,7 +28,9 @@ process CHECK_REPEAT_LIBRARY {
 
     script:
     """
-    REPEAT_URL="${params.repeats_ftp_base}/${species_name}/${gca}.repeatmodeler.fa"
+    # Normalize species name: capitalize first letter of genus, lowercase species epithet
+    SPECIES_NORMALIZED=\$(echo "${species_name}" | awk -F'_' '{print toupper(substr(\$1,1,1)) tolower(substr(\$1,2)) "_" tolower(\$2)}')
+    REPEAT_URL="${params.repeats_ftp_base}/\${SPECIES_NORMALIZED}/${gca}.repeatmodeler.fa"
 
     if curl --head --silent --fail "\$REPEAT_URL" > /dev/null 2>&1; then
         echo -n "exists"
