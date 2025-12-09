@@ -18,7 +18,7 @@ limitations under the License.
 
 process CHECK_REPEAT_LIBRARY {
     tag "$gca:check_library"
-    label 'fetch_file'
+    label 'default'
 
     input:
     tuple val(species_name), val(gca)
