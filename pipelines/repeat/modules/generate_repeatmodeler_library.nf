@@ -22,6 +22,8 @@ process GENERATE_REPEATMODELER_LIBRARY {
     publishDir "${params.outDir}/${gca}/library", mode: 'copy'
     afterScript "sleep $params.files_latency"  // Needed because of file system latency
 
+    container  "https://depot.galaxyproject.org/singularity/repeatmodeler%3A2.0.7--pl5321hdfd78af_0"
+
     input:
     tuple val(species),val(gca),path(genome_file)
 
@@ -31,7 +33,7 @@ process GENERATE_REPEATMODELER_LIBRARY {
     script:
     """
     echo "Running RepeatModeler for ${gca} using genome file ${genome_file}"
-    ${params.builddatabase_path} -name ${gca}.repeatmodeler -dir ${params.outDir}/${gca}
-    singularity run ${params.repeatmodeler_path} RepeatModeler -engine ${params.engine_repeatmodeler} -threads ${task.cpus} -database ${gca}.repeatmodeler
+    BuildDatabase -name ${gca}.repeatmodeler -dir ${params.outDir}/${gca}
+    RepeatModeler -engine ${params.engine_repeatmodeler} -threads ${task.cpus} -database ${gca}.repeatmodeler
     """
 }
