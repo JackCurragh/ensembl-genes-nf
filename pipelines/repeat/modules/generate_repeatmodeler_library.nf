@@ -33,7 +33,7 @@ process GENERATE_REPEATMODELER_LIBRARY {
     script:
     """
     echo "Running RepeatModeler for ${gca} using genome file ${genome_file}"
-    BuildDatabase -name ${gca}.repeatmodeler -dir ${params.outDir}/${gca}
+    BuildDatabase -name ${gca}.repeatmodeler ${genome_file}
     RepeatModeler -engine ${params.engine_repeatmodeler} -threads ${task.cpus} -database ${gca}.repeatmodeler
     """
 }

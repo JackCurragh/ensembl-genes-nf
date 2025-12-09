@@ -1,8 +1,9 @@
 nextflow.enable.dsl=2
 import java.nio.file.Files
 
+include {CHECK_REPEAT_LIBRARY} from '../modules/check_repeat_library.nf'
+include {DOWNLOAD_REPEAT_LIBRARY} from '../modules/download_repeat_library.nf'
 include {FETCH_GENOME} from '../modules/fetch_genome.nf'
-include {FETCH_REPEAT_MODEL} from '../modules/fetch_repeat_model.nf'
 include {GENERATE_REPEATMODELER_LIBRARY} from '../modules/generate_repeatmodeler_library.nf'
 
 workflow {
@@ -15,26 +16,33 @@ workflow {
     if (params.csvFile) {
         csvFile = file(params.csvFile, checkIfExists: true)
     } else {
-        error 'CSV file not specified!'
+        error 'csvFile file not specified!'
     }
-// Read data from the CSV file, split it, and map each row to extract species_name and GCA values
+
+    // Read data from the CSV file, split it, and map each row to extract species_name and GCA values
     data_with_gca = Channel.fromPath(csvFile, type: 'file')
            .splitCsv(sep: ',', header: false)
            .map { row -> tuple(row[0], row[1]) }
 
-    fetched_genome = FETCH_GENOME(data_with_gca)
+    // Check if repeat library exists on Ensembl FTP
+    library_check = CHECK_REPEAT_LIBRARY(data_with_gca)
 
-    fetch_repeat = FETCH_REPEAT_MODEL(fetched_genome)
+    // Branch: separate genomes with existing libraries vs those that need generation
+    library_check.branch {
+        exists: it[2].trim() == 'exists'
+        missing: it[2].trim() == 'missing'
+    }.set { branched }
 
-// Filter tuples where repeatmodeler file is incomplete
-    incomplete_repeat_models = fetch_repeat
-        .filter { species, gca, genome_file, repeatmodeler_file ->
-            repeatmodeler_file.text.contains("No repeatmodeler file available")
-        }
-        .map { species, gca, genome_file, repeatmodeler_file ->
-            tuple(species, gca, genome_file)
-        }
+    // Path 1: Download pre-existing libraries (fast, no genome needed)
+    existing_libraries = branched.exists
+        .map { species, gca, status -> tuple(species, gca) }
+    DOWNLOAD_REPEAT_LIBRARY(existing_libraries)
 
-    //Send the GCA and genome path to the GENERATE_REPEATMODELER_LIBRARY process
-    GENERATE_REPEATMODELER_LIBRARY(incomplete_repeat_models)
+    // Path 2: Fetch genome and generate RepeatModeler library (slow)
+    genomes_to_process = branched.missing
+        .map { species, gca, status -> tuple(species, gca) }
+
+    fetched_genome = FETCH_GENOME(genomes_to_process)
+
+    GENERATE_REPEATMODELER_LIBRARY(fetched_genome)
 }    
