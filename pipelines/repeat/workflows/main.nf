@@ -18,21 +18,23 @@ workflow {
         error 'CSV file not specified!'
     }
 // Read data from the CSV file, split it, and map each row to extract species_name and GCA values
-    data = Channel.fromPath(csvFile, type: 'file')
+    data_with_gca = Channel.fromPath(csvFile, type: 'file')
            .splitCsv(sep: ',', header: false)
-           .map { row -> [species_name: row[0], gca: row[1]] }
-           .set { data_with_gca }
-    FETCH_GENOME(data_with_gca)
-        .set{fetched_genome}
+           .map { row -> tuple(row[0], row[1]) }
 
-   def fetch_repeat = FETCH_REPEAT_MODEL(fetched_genome)
+    fetched_genome = FETCH_GENOME(data_with_gca)
+
+    fetch_repeat = FETCH_REPEAT_MODEL(fetched_genome)
 
 // Filter tuples where repeatmodeler file is incomplete
-incomplete_repeat_models = fetch_repeat.filter { species, gca, genome_file, repeatmodeler_file ->
-    def fileContent = repeatmodeler_file.text
-    return fileContent.contains("No repeatmodeler file available")
-}
+    incomplete_repeat_models = fetch_repeat
+        .filter { species, gca, genome_file, repeatmodeler_file ->
+            repeatmodeler_file.text.contains("No repeatmodeler file available")
+        }
+        .map { species, gca, genome_file, repeatmodeler_file ->
+            tuple(species, gca, genome_file)
+        }
 
-//Send the GCA and genome path to the GENERATE_REPEATMODELER_LIBRARY process
-GENERATE_REPEATMODELER_LIBRARY(incomplete_repeat_models)
+    //Send the GCA and genome path to the GENERATE_REPEATMODELER_LIBRARY process
+    GENERATE_REPEATMODELER_LIBRARY(incomplete_repeat_models)
 }    
