@@ -18,7 +18,12 @@ process FETCH_UNIPROT {
         'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
         'biocontainers/python:3.11--h2ad013b_0_cp311' }"
 
-    publishDir "${params.outdir}/uniprot", mode: 'copy', pattern: "*.fa"
+    // UniProt proteins are clade-level (one FASTA per taxon ID) and can be shared
+    // across assemblies of the same clade. Override params.uniprot_store_dir to a
+    // shared path (e.g. /hps/nobackup/.../genebuild/uniprot_cache) to avoid
+    // re-downloading the same proteins for every rodent or mammal assembly.
+    // Default: per-assembly store under outdir.
+    storeDir "${params.uniprot_store_dir}"
 
     input:
     val taxon_id   // NCBI taxonomy ID (integer or string)

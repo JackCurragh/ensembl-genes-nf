@@ -30,8 +30,9 @@ include { FETCH_UNIPROT  } from './modules/fetch_uniprot.nf'
 include { WRITE_MANIFEST } from './modules/write_manifest.nf'
 include { RUN_HOMOLOGY   } from './subworkflows/run_homology.nf'
 
-params.uniprot_fasta    = null
-params.uniprot_taxon_id = null
+params.uniprot_fasta      = null
+params.uniprot_taxon_id   = null
+params.uniprot_store_dir  = "${params.outdir}/store/uniprot"   // override to share across assemblies
 params.protein_batch_size = 100
 params.genblast_max_rank  = 5
 

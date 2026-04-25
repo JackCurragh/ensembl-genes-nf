@@ -12,6 +12,11 @@ process DOWNLOAD_ASSEMBLY {
         'https://depot.galaxyproject.org/singularity/wget:1.21.4--h2b5d971_0' :
         'biocontainers/wget:1.21.4--h2b5d971_0' }"
 
+    // Genome FASTA is stable for a given accession — no need to re-download.
+    // Avoids repeated NCBI FTP hits and protects against transient network failures
+    // on re-runs. The accession+assembly_name are baked into the output filename.
+    storeDir "${params.outdir}/store/genome"
+
     input:
     val accession    // GCA_... accession (GenBank)
     val assembly     // assembly name, e.g. GRCh38.p14

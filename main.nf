@@ -92,6 +92,12 @@ params.assembly_name             = null
 params.outdir                    = null
 params.nf_work_root              = null
 
+// Permanent store directories (storeDir caches — survive work dir cleanup)
+// These default to subdirectories of outdir but can be overridden to shared
+// locations when running multiple assemblies of the same clade, e.g.:
+//   --uniprot_store_dir /hps/nobackup/.../genebuild/uniprot_cache
+params.uniprot_store_dir         = "${params.outdir}/store/uniprot"
+
 // RNA-seq evidence (local or ENA fetch)
 params.sample_sheet              = null
 params.rnaseq_bioproject         = null

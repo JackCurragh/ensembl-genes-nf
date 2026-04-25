@@ -7,6 +7,11 @@ process REPEATMODELER_REPEATMODELER {
         'https://depot.galaxyproject.org/singularity/repeatmodeler:2.0.5--pl5321hdfd78af_1' :
         'biocontainers/repeatmodeler:2.0.5--pl5321hdfd78af_1' }"
 
+    // RepeatModeler takes 5–7 days for a mammal genome. Cache the repeat library
+    // permanently so any re-run of the annotation pipeline skips this step entirely.
+    // The store is per-assembly (outdir is assembly-specific).
+    storeDir "${params.outdir}/store/repeatmodeler"
+
     input:
     tuple val(meta), path(fasta)
 

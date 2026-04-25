@@ -7,6 +7,11 @@ process REPEATMASKER_REPEATMASKER {
         'https://depot.galaxyproject.org/singularity/repeatmasker:4.1.5--pl5321hdfd78af_1' :
         'biocontainers/repeatmasker:4.1.5--pl5321hdfd78af_1' }"
 
+    // Each genome chunk runs as a separate invocation; outputs (*.out, *.masked, etc.)
+    // are named by meta.id so all chunks share one store dir without collision.
+    // On re-run, any chunk whose .out file already exists is skipped immediately.
+    storeDir "${params.outdir}/store/repeatmasker"
+
     input:
     tuple val(meta), path(fasta)
     path  lib        // repeat library file; pass [] to use -species instead

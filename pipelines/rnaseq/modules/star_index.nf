@@ -10,7 +10,11 @@ process STAR_INDEX {
         'https://depot.galaxyproject.org/singularity/star:2.7.11b--h43eeafb_0' :
         'biocontainers/star:2.7.11b--h43eeafb_0' }"
 
-    publishDir "${params.outdir}/star_index", mode: 'copy'
+    // Building a STAR index takes 30–60 min and 30+ GB RAM. Cache it so any
+    // re-run of the RNA-seq pipeline (or a second RNA-seq experiment against
+    // the same assembly) skips index generation entirely.
+    // publishDir is intentionally omitted — storeDir IS the permanent location.
+    storeDir "${params.outdir}/store/star_index"
 
     input:
     path genome_fasta
