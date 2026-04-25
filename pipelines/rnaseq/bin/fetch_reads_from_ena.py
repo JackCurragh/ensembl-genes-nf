@@ -52,14 +52,14 @@ def resolve_runs(accession: str) -> list[dict]:
     Resolve a BioProject or comma-separated run accessions to a list of run dicts.
     Each dict has: run_accession, fastq_ftp, library_layout, sample_accession.
     """
+    FIELDS = "run_accession,fastq_ftp,fastq_md5,library_layout,library_source,sample_accession,instrument_platform,read_count"
+
     # Comma-separated run accessions (SRR/ERR/DRR)
     if re.match(r'^[SED]RR\d+', accession):
-        runs_str = accession
-        query = f"run_accession={runs_str.replace(',', '%20OR%20run_accession=')}"
         params = {
             "accession": accession.split(',')[0],  # just use first for API call
             "result":    "read_run",
-            "fields":    "run_accession,fastq_ftp,library_layout,sample_accession,instrument_platform",
+            "fields":    FIELDS,
             "format":    "json",
             "limit":     500,
         }
@@ -67,7 +67,7 @@ def resolve_runs(accession: str) -> list[dict]:
         params = {
             "accession": accession,
             "result":    "read_run",
-            "fields":    "run_accession,fastq_ftp,library_layout,sample_accession,instrument_platform",
+            "fields":    FIELDS,
             "format":    "json",
             "limit":     1000,
         }
@@ -134,11 +134,15 @@ def main():
     print(f"Resolving ENA accession: {args.accession}", file=sys.stderr)
     runs = resolve_runs(args.accession)
 
-    # Filter to Illumina short-read only
-    runs = [r for r in runs if r.get("instrument_platform", "ILLUMINA") == "ILLUMINA"]
+    # Filter: Illumina short-read transcriptomic data only
+    runs = [
+        r for r in runs
+        if r.get("instrument_platform", "ILLUMINA") == "ILLUMINA"
+        and r.get("library_source", "TRANSCRIPTOMIC") == "TRANSCRIPTOMIC"
+    ]
 
     if not runs:
-        print("ERROR: no Illumina short-read runs found for this accession", file=sys.stderr)
+        print("ERROR: no Illumina TRANSCRIPTOMIC short-read runs found for this accession", file=sys.stderr)
         sys.exit(1)
 
     if len(runs) > args.max_runs:
@@ -155,6 +159,16 @@ def main():
             continue
 
         ftp_files = [f.strip() for f in ftp.split(";") if f.strip()]
+
+        # ENA sometimes returns 3 files: unmerged + R1 + R2 for paired runs.
+        # Strip any file that isn't clearly R1 (_1.fastq.gz) or R2 (_2.fastq.gz)
+        # so we always download a clean pair.
+        if layout == "PAIRED" and len(ftp_files) == 3:
+            paired = [f for f in ftp_files if "_1.fastq.gz" in f or "_2.fastq.gz" in f]
+            if len(paired) == 2:
+                ftp_files = paired
+            else:
+                print(f"  WARN: unexpected 3-file layout for {acc}, using all files", file=sys.stderr)
 
         # Get tissue label for id
         sample_id = run.get("sample_accession", acc)
