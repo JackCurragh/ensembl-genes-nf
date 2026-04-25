@@ -154,7 +154,7 @@ def _try_import_registry():
     try:
         from ensembl.genes.info_from_registry.start_pipeline_from_registry import (
             load_settings,
-            get_server_settings_anno,
+            get_server_settings_main,
             add_generated_data,
         )
         from ensembl.genes.info_from_registry.assign_species_prefix import (
@@ -165,13 +165,13 @@ def _try_import_registry():
         )
 
         return {
-            "load_settings":       load_settings,
-            "get_server_settings": get_server_settings_anno,
-            "add_generated_data":  add_generated_data,
-            "get_species_prefix":  get_species_prefix,
-            "get_stable_space":    get_stable_space,
+            "load_settings":          load_settings,
+            "get_server_settings_main": get_server_settings_main,
+            "add_generated_data":     add_generated_data,
+            "get_species_prefix":     get_species_prefix,
+            "get_stable_space":       get_stable_space,
         }
-    except ImportError as exc:
+    except ImportError:
         return None
 
 
@@ -192,8 +192,25 @@ def resolve_metadata_from_registry(
             "(omit --settings-file and supply --assembly-name / --taxon-id manually)."
         )
 
-    settings    = reg["load_settings"](settings_file)
-    server_info = reg["get_server_settings"](settings)
+    settings = reg["load_settings"](settings_file)
+
+    # Build server_info the same way start_pipeline_from_registry.py main() does:
+    # start with the registry DB (GBS1/GBP1 = gb_assembly_metadata), then
+    # merge in the main pipeline/core/databases servers.
+    # GBS1 / GBP1 are the assembly metadata registry host/port env vars.
+    server_info = {
+        "registry": {
+            "db_host":   os.environ.get("GBS1"),
+            "db_user":   settings["user_r"],
+            "db_user_w": settings["user"],
+            "db_port":   os.environ.get("GBP1"),
+            "db_name":   "gb_assembly_metadata",
+            "password":  settings["password"],
+        }
+    }
+    # Merge in pipeline_db / core_db / databases keys needed by assign_clade,
+    # get_species_prefix, and get_stable_space.
+    server_info.update(reg["get_server_settings_main"](settings))
 
     print(f"Querying registry for {gca}...", file=sys.stderr)
     info = reg["add_generated_data"](server_info, gca, settings)
