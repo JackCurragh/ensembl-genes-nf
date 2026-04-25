@@ -96,6 +96,8 @@ params.nf_work_root              = null
 params.sample_sheet              = null
 params.rnaseq_bioproject         = null
 params.rnaseq_run_accessions     = null
+params.max_rnaseq_runs           = 50       // cap number of ENA runs downloaded per BioProject
+params.rnaseq_strandedness       = 'auto'   // forward/reverse/unstranded/auto
 
 // Long-read evidence
 params.long_read_sample_sheet    = null
@@ -106,6 +108,7 @@ params.uniprot_fasta             = null
 params.uniprot_taxon_id          = null
 
 // Other optional evidence
+params.igtr_proteins             = null   // IGTR FASTA (resolved from clade_settings by setup_experiment.py)
 params.cdna_fasta                = null
 params.protein_fasta             = null
 params.rfam_cm                   = null
