@@ -43,24 +43,51 @@ from datetime import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# HPC path constants — flag [CHECK] items before running on a new cluster
+# HPC path constants
+# Items marked [CHECK] need verifying on each cluster before the first run.
 # ---------------------------------------------------------------------------
 
-# Base directory for IGTR FASTA files referenced by filename in clade_settings.json
-IGTR_BASE_DIR = (
-    "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ig_tr_proteins"  # [CHECK]
-)
-
-# RepeatModeler library base (only used if --skip-repeatmodeler is NOT set
-# and no pre-built library is found; RepeatModeler will build from scratch)
-REPEATMODELER_LIB_BASE = (
-    "/hps/nobackup/flicek/ensembl/genebuild/repeatmodeler_libraries"  # [CHECK]
-)
+# Base directory for IGTR FASTA files (filenames come from clade_settings.json)
+IGTR_BASE_DIR = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ig_tr_proteins"  # [CHECK]
 
 # Selenoprotein FASTA used by the finalise stage
-SELENOPROTEIN_FASTA = (
-    "/hps/nobackup/flicek/ensembl/genebuild/blastdb/selenoproteins/selenoproteins.fa"  # [CHECK]
-)
+SELENOPROTEIN_FASTA = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/selenoproteins/selenoproteins.fa"  # [CHECK]
+
+# Rfam covariance model file — used by cmsearch in the short_ncrna stage
+RFAM_CM = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ncrna/Rfam_14.1/Rfam.cm"  # [CHECK]
+
+# miRNA FASTA — blasted against softmasked genome in short_ncrna
+MIRNA_FASTA = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ncrna/mirBase/all_mirnas.fa"  # [CHECK]
+
+# Projection source genomes and annotations.
+# Keys are production_name values from clade_settings.json
+# (projection_source_production_name field).
+# Each entry needs:
+#   fasta — softmasked genome FASTA of the reference species
+#   gff3  — canonical gene annotation GFF3 of the reference species
+# These files must be pre-generated and available on shared storage.
+# Generate the GFF3 with:
+#   python ensembl-genes/scripts/export_gff3_from_core.py \
+#       --host $GBS5 --port $GBP5 --dbname mus_musculus_core_114_39 \
+#       --out mus_musculus.gff3
+PROJECTION_SOURCES: dict[str, dict] = {
+    "homo_sapiens": {
+        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/homo_sapiens/GRCh38.softmasked.fa",  # [CHECK]
+        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/homo_sapiens/homo_sapiens.gff3",     # [CHECK]
+    },
+    "mus_musculus": {
+        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/mus_musculus/GRCm39.softmasked.fa",  # [CHECK]
+        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/mus_musculus/mus_musculus.gff3",     # [CHECK]
+    },
+    "danio_rerio": {
+        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/danio_rerio/GRCz11.softmasked.fa",   # [CHECK]
+        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/danio_rerio/danio_rerio.gff3",       # [CHECK]
+    },
+    "gallus_gallus": {
+        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/gallus_gallus/bGalGal1.softmasked.fa",  # [CHECK]
+        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/gallus_gallus/gallus_gallus.gff3",      # [CHECK]
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Augustus species models — closest available trained model per taxon/clade
@@ -102,31 +129,61 @@ def get_augustus_species(taxon_id: int | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ENA RNA-seq lookup (best-effort — only used in standalone mode)
+# ENA data lookup (best-effort)
 # ---------------------------------------------------------------------------
-def find_rnaseq_bioproject(taxon_id: int) -> str | None:
+def _ena_search(taxon_id: int, platform_filter, strategy_filter) -> list[str]:
+    """
+    Return all unique study_accessions from ENA for the given taxon that match
+    the platform and library strategy filters.  Returns [] on failure.
+    """
     import urllib.request
 
-    query  = f"tax_eq({taxon_id})"
-    fields = "study_accession,instrument_platform,library_strategy"
+    query = f"tax_tree({taxon_id})"   # tax_tree includes subordinate taxa
+    fields = "study_accession,instrument_platform,library_strategy,library_source"
     url = (
         "https://www.ebi.ac.uk/ena/portal/api/search"
         f"?display=report&query={query}&domain=read&result=read_run"
-        f"&fields={fields}&limit=10&format=json"
+        f"&fields={fields}&limit=500&format=json"
     )
     try:
         with urllib.request.urlopen(url, timeout=30) as resp:
             data = json.loads(resp.read())
-        illumina = [
-            r for r in data
-            if r.get("instrument_platform") == "ILLUMINA"
-            and r.get("library_strategy") in ("RNA-Seq", "EST")
-        ]
-        if illumina:
-            return illumina[0]["study_accession"]
+        seen: list[str] = []
+        seen_set: set[str] = set()
+        for r in data:
+            if (
+                r.get("instrument_platform") in platform_filter
+                and r.get("library_strategy") in strategy_filter
+                and r.get("library_source") == "TRANSCRIPTOMIC"
+            ):
+                bp = r["study_accession"]
+                if bp not in seen_set:
+                    seen_set.add(bp)
+                    seen.append(bp)
+        return seen
     except Exception as exc:
         print(f"  [WARN] ENA lookup failed: {exc}", file=sys.stderr)
-    return None
+    return []
+
+
+def find_rnaseq_bioproject(taxon_id: int) -> str | None:
+    """Return comma-separated ENA short-read RNA-seq BioProject(s) or None."""
+    hits = _ena_search(
+        taxon_id,
+        platform_filter={"ILLUMINA"},
+        strategy_filter={"RNA-Seq", "EST"},
+    )
+    return ",".join(hits) if hits else None
+
+
+def find_longread_bioproject(taxon_id: int) -> str | None:
+    """Return comma-separated ENA long-read RNA BioProject(s) or None."""
+    hits = _ena_search(
+        taxon_id,
+        platform_filter={"OXFORD_NANOPORE", "PACBIO_SMRT"},
+        strategy_filter={"RNA-Seq"},
+    )
+    return ",".join(hits) if hits else None
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +317,32 @@ def resolve_metadata_from_registry(
     if info.get("ig_tr_fasta_file"):
         igtr_fasta = str(Path(IGTR_BASE_DIR) / info["ig_tr_fasta_file"])
 
+    # ── Projection source ─────────────────────────────────────────────────────
+    projection_source = info.get("projection_source_production_name")
+    source_fasta = source_gff3 = None
+    if projection_source and projection_source in PROJECTION_SOURCES:
+        src = PROJECTION_SOURCES[projection_source]
+        source_fasta = src["fasta"]
+        source_gff3  = src["gff3"]
+        print(f"  Projection     : {projection_source}", file=sys.stderr)
+        # Warn if the files don't exist yet — they need to be pre-generated
+        for label, path in [("fasta", source_fasta), ("gff3", source_gff3)]:
+            if not Path(path).exists():
+                print(f"  [WARN] Projection {label} not found: {path}", file=sys.stderr)
+                print(f"         Projection stage will be SKIPPED until this file exists.", file=sys.stderr)
+    elif projection_source:
+        print(
+            f"  [WARN] No projection source paths configured for '{projection_source}'. "
+            f"Add an entry to PROJECTION_SOURCES in setup_experiment.py.",
+            file=sys.stderr,
+        )
+
+    # ── Short ncRNA ───────────────────────────────────────────────────────────
+    rfam_cm     = RFAM_CM     if Path(RFAM_CM).exists()     else None
+    mirna_fasta = MIRNA_FASTA if Path(MIRNA_FASTA).exists() else None
+    if not rfam_cm:
+        print(f"  [WARN] Rfam CM not found: {RFAM_CM} — short_ncrna stage will be SKIPPED", file=sys.stderr)
+
     # ── RepeatModeler library ─────────────────────────────────────────────────
     repbase_library = info.get("repbase_library", "vertebrates")
 
@@ -270,20 +353,23 @@ def resolve_metadata_from_registry(
     augustus_species = get_augustus_species(taxon_id)
 
     return {
-        "assembly_name":       info["assembly_name"],
-        "species_name":        info["species_name"],
-        "taxon_id":            taxon_id,
-        "clade":               info.get("clade"),
-        "stable_id_prefix":    stable_id_prefix,
-        "stable_id_start":     stable_id_start,
-        "augustus_species":    augustus_species,
-        "repbase_library":     repbase_library,
-        "refseq_accession":    refseq_accession,
-        "uniprot_fasta":       uniprot_fasta,
-        "uniprot_taxon_id":    uniprot_taxon_id,
-        "igtr_fasta":          igtr_fasta,
-        "projection_source":   info.get("projection_source_production_name"),
-        "outdir":              outdir,
+        "assembly_name":    info["assembly_name"],
+        "species_name":     info["species_name"],
+        "taxon_id":         taxon_id,
+        "clade":            info.get("clade"),
+        "stable_id_prefix": stable_id_prefix,
+        "stable_id_start":  stable_id_start,
+        "augustus_species": augustus_species,
+        "repbase_library":  repbase_library,
+        "refseq_accession": refseq_accession,
+        "uniprot_fasta":    uniprot_fasta,
+        "uniprot_taxon_id": uniprot_taxon_id,
+        "igtr_fasta":       igtr_fasta,
+        "source_fasta":     source_fasta,
+        "source_gff3":      source_gff3,
+        "rfam_cm":          rfam_cm,
+        "mirna_fasta":      mirna_fasta,
+        "outdir":           outdir,
     }
 
 
@@ -292,6 +378,8 @@ def resolve_metadata_standalone(args) -> dict:
     if not args.assembly_name:
         sys.exit("--assembly-name is required in standalone mode (no --settings-file).")
     augustus_species = args.augustus_species or get_augustus_species(args.taxon_id)
+    rfam_cm     = RFAM_CM     if Path(RFAM_CM).exists()     else None
+    mirna_fasta = MIRNA_FASTA if Path(MIRNA_FASTA).exists() else None
     return {
         "assembly_name":    args.assembly_name,
         "species_name":     args.species_name,
@@ -305,7 +393,10 @@ def resolve_metadata_standalone(args) -> dict:
         "uniprot_fasta":    args.uniprot_fasta,
         "uniprot_taxon_id": args.uniprot_taxon_id,
         "igtr_fasta":       None,
-        "projection_source": None,
+        "source_fasta":     args.source_fasta,
+        "source_gff3":      args.source_gff3,
+        "rfam_cm":          rfam_cm,
+        "mirna_fasta":      mirna_fasta,
         "outdir":           args.outdir.rstrip("/"),
     }
 
@@ -321,7 +412,9 @@ def build_nf_command(
     nf_work_root: str,
     profile: str,
     rnaseq_nf_arg: str,
+    longread_nf_arg: str,
     has_rnaseq: bool,
+    has_longread: bool,
     has_genblast: bool,
     skip_repeatmodeler: bool,
 ) -> tuple[str, dict]:
@@ -330,11 +423,17 @@ def build_nf_command(
 
     Returns (nf_cmd_string, prefect_params_dict).
     """
+    has_projection = bool(meta.get("source_fasta") and meta.get("source_gff3"))
+    has_ncrna      = bool(meta.get("rfam_cm"))
+
     stages = {
-        "rnaseq":   has_rnaseq,
-        "genblast": has_genblast,
-        "refseq":   bool(meta["refseq_accession"]),
-        "igtr":     bool(meta.get("igtr_fasta")),
+        "long_read":  has_longread,
+        "rnaseq":     has_rnaseq,
+        "projection": has_projection,
+        "genblast":   has_genblast,
+        "refseq":     bool(meta.get("refseq_accession")),
+        "ncrna":      has_ncrna,
+        "igtr":       bool(meta.get("igtr_fasta")),
     }
     layer_prios_json = json.dumps(build_layer_priorities(stages))
 
@@ -355,6 +454,21 @@ def build_nf_command(
     if rnaseq_nf_arg:
         nf_lines.append(f"  {rnaseq_nf_arg}")
 
+    # Long-read
+    if longread_nf_arg:
+        nf_lines.append(f"  {longread_nf_arg}")
+
+    # Projection
+    if has_projection:
+        nf_lines.append(f"  --source_fasta              {meta['source_fasta']}")
+        nf_lines.append(f"  --source_gff3               {meta['source_gff3']}")
+
+    # Short ncRNA
+    if meta.get("rfam_cm"):
+        nf_lines.append(f"  --rfam_cm                   {meta['rfam_cm']}")
+    if meta.get("mirna_fasta"):
+        nf_lines.append(f"  --mirna_fasta               {meta['mirna_fasta']}")
+
     # UniProt / protein homology
     if meta.get("uniprot_fasta"):
         nf_lines.append(f"  --uniprot_fasta             {meta['uniprot_fasta']}")
@@ -366,8 +480,11 @@ def build_nf_command(
         nf_lines.append(f"  --igtr_proteins             {meta['igtr_fasta']}")
 
     # RefSeq
-    if meta["refseq_accession"]:
+    if meta.get("refseq_accession"):
         nf_lines.append(f"  --assembly_refseq_accession {meta['refseq_accession']}")
+
+    # Selenoproteins
+    nf_lines.append(f"  --selenoprotein_fasta       {SELENOPROTEIN_FASTA}")
 
     # RepeatModeler
     if skip_repeatmodeler:
@@ -376,10 +493,6 @@ def build_nf_command(
     # Species name (for core DB loading)
     if meta.get("species_name"):
         nf_lines.append(f"  --species_name              '{meta['species_name']}'")
-
-    # Selenoproteins
-    if Path(SELENOPROTEIN_FASTA).exists() or True:  # always include; NF checks existence
-        nf_lines.append(f"  --selenoprotein_fasta       {SELENOPROTEIN_FASTA}")
 
     nf_lines.append(f"  -profile                    {profile}")
     nf_lines.append("  -resume")
@@ -400,13 +513,17 @@ def build_nf_command(
         "repbase_library":           meta["repbase_library"],
         "layer_priorities":          build_layer_priorities(stages),
         "rnaseq_source":             rnaseq_nf_arg or None,
+        "longread_source":           longread_nf_arg or None,
+        "source_fasta":              meta.get("source_fasta"),
+        "source_gff3":               meta.get("source_gff3"),
+        "rfam_cm":                   meta.get("rfam_cm"),
+        "mirna_fasta":               meta.get("mirna_fasta"),
         "uniprot_fasta":             meta.get("uniprot_fasta"),
         "uniprot_taxon_id":          meta.get("uniprot_taxon_id"),
         "igtr_proteins":             meta.get("igtr_fasta"),
-        "assembly_refseq_accession": meta["refseq_accession"],
+        "assembly_refseq_accession": meta.get("refseq_accession"),
         "stable_id_prefix":          meta["stable_id_prefix"],
         "stable_id_start":           meta["stable_id_start"],
-        "projection_source":         meta.get("projection_source"),
     }
 
     return nf_cmd, prefect_params
@@ -450,12 +567,24 @@ def main() -> None:
     standalone_grp.add_argument("--refseq-accession", default=None, help="GCF accession for RefSeq import")
     standalone_grp.add_argument("--augustus-species", default=None, help="Override Augustus species model")
     standalone_grp.add_argument("--skip-repeatmodeler", action="store_true")
+    # Projection source (standalone or registry override)
+    standalone_grp.add_argument("--source-fasta", default=None,
+                                help="Projection source genome FASTA (overrides registry lookup)")
+    standalone_grp.add_argument("--source-gff3",  default=None,
+                                help="Projection source annotation GFF3 (overrides registry lookup)")
 
     # ── RNA-seq (mutually exclusive) ──────────────────────────────────────────
     g_rna = parser.add_mutually_exclusive_group()
     g_rna.add_argument("--sample-sheet",         default=None, help="Local CSV sample sheet")
-    g_rna.add_argument("--rnaseq-bioproject",    default=None, help="ENA BioProject accession")
+    g_rna.add_argument("--rnaseq-bioproject",    default=None, help="ENA BioProject accession(s), comma-separated")
     g_rna.add_argument("--rnaseq-run-accessions",default=None, help="Comma-separated SRR/ERR accessions")
+
+    # ── Long-read RNA (mutually exclusive) ────────────────────────────────────
+    g_lr = parser.add_mutually_exclusive_group()
+    g_lr.add_argument("--long-read-bioproject", default=None,
+                      help="ENA BioProject accession(s) for long-read RNA (comma-separated)")
+    g_lr.add_argument("--long-read-csv",        default=None,
+                      help="Pre-built long-read CSV sample sheet (tab-separated, ENA format)")
 
     # ── UniProt (mutually exclusive, standalone override) ─────────────────────
     g_prot = parser.add_mutually_exclusive_group()
@@ -493,6 +622,11 @@ def main() -> None:
         if args.uniprot_taxon_id:
             meta["uniprot_taxon_id"] = args.uniprot_taxon_id
             meta["uniprot_fasta"]    = None
+        # Projection source overrides
+        if args.source_fasta:
+            meta["source_fasta"] = args.source_fasta
+        if args.source_gff3:
+            meta["source_gff3"] = args.source_gff3
     else:
         meta = resolve_metadata_standalone(args)
 
@@ -523,11 +657,36 @@ def main() -> None:
         )
         bioproject = find_rnaseq_bioproject(meta["taxon_id"])
         if bioproject:
-            print(f"  Found: {bioproject}", file=sys.stderr)
+            n_projects = len(bioproject.split(","))
+            print(f"  Found {n_projects} project(s): {bioproject}", file=sys.stderr)
             rnaseq_nf_arg = f"--rnaseq_bioproject         {bioproject}"
             has_rnaseq    = True
         else:
-            print("  [WARN] No RNA-seq found in ENA — running ab initio only.", file=sys.stderr)
+            print("  [WARN] No short-read RNA-seq found in ENA — skipping RNA-seq stage.", file=sys.stderr)
+
+    # ── Resolve long-read RNA ──────────────────────────────────────────────────
+    longread_nf_arg = ""
+    has_longread    = False
+
+    if args.long_read_csv:
+        longread_nf_arg = f"--long_read_csv             {args.long_read_csv}"
+        has_longread    = True
+    elif args.long_read_bioproject:
+        longread_nf_arg = f"--long_read_bioproject      {args.long_read_bioproject}"
+        has_longread    = True
+    elif meta.get("taxon_id"):
+        print(
+            f"No long-read specified — querying ENA for taxon {meta['taxon_id']}...",
+            file=sys.stderr,
+        )
+        lr_bioproject = find_longread_bioproject(meta["taxon_id"])
+        if lr_bioproject:
+            n_projects = len(lr_bioproject.split(","))
+            print(f"  Found {n_projects} long-read project(s): {lr_bioproject}", file=sys.stderr)
+            longread_nf_arg = f"--long_read_bioproject      {lr_bioproject}"
+            has_longread    = True
+        else:
+            print("  [INFO] No long-read RNA found in ENA — skipping long-read stage.", file=sys.stderr)
 
     has_genblast = bool(meta.get("uniprot_fasta") or meta.get("uniprot_taxon_id"))
 
@@ -539,7 +698,9 @@ def main() -> None:
         nf_work_root       = nf_work_root,
         profile            = args.profile,
         rnaseq_nf_arg      = rnaseq_nf_arg,
+        longread_nf_arg    = longread_nf_arg,
         has_rnaseq         = has_rnaseq,
+        has_longread       = has_longread,
         has_genblast       = has_genblast,
         skip_repeatmodeler = skip_repeatmodeler,
     )
@@ -583,12 +744,21 @@ fi
     Path(prefect_path).write_text(json.dumps(prefect_params, indent=2))
 
     # ── Summary ────────────────────────────────────────────────────────────────
-    layer_prios_json = json.dumps(build_layer_priorities({
-        "rnaseq":   has_rnaseq,
-        "genblast": has_genblast,
-        "refseq":   bool(meta["refseq_accession"]),
-        "igtr":     bool(meta.get("igtr_fasta")),
-    }))
+    has_projection = bool(meta.get("source_fasta") and meta.get("source_gff3"))
+    has_ncrna      = bool(meta.get("rfam_cm"))
+    stage_flags = {
+        "long_read":  has_longread,
+        "rnaseq":     has_rnaseq,
+        "projection": has_projection,
+        "genblast":   has_genblast,
+        "refseq":     bool(meta.get("refseq_accession")),
+        "ncrna":      has_ncrna,
+        "igtr":       bool(meta.get("igtr_fasta")),
+    }
+    layer_prios_json = json.dumps(build_layer_priorities(stage_flags))
+
+    def _tick(flag: bool) -> str:
+        return "✓" if flag else "✗"
 
     print(f"\n{'='*65}")
     print(f"  Experiment : {args.gca} ({assembly_name})")
@@ -599,16 +769,37 @@ fi
     print(f"  Prefect params : {prefect_path}")
     print(f"  Outdir         : {outdir}")
     print(f"\n  Active stages:")
-    print(f"    Ab initio     : Augustus '{meta['augustus_species']}' (always)")
+    print(f"    {_tick(True)}  Repeat masking   : RepeatModeler + RepeatMasker ({meta['repbase_library']})")
+    print(f"    {_tick(True)}  Ab initio        : Augustus '{meta['augustus_species']}'")
     if has_rnaseq:
-        print(f"    RNA-seq       : {rnaseq_nf_arg.strip()}")
+        print(f"    {_tick(True)}  RNA-seq          : {rnaseq_nf_arg.strip()}")
+    else:
+        print(f"    {_tick(False)}  RNA-seq          : not found / not provided")
+    if has_longread:
+        print(f"    {_tick(True)}  Long-read RNA    : {longread_nf_arg.strip()}")
+    else:
+        print(f"    {_tick(False)}  Long-read RNA    : not found / not provided")
+    if has_projection:
+        print(f"    {_tick(True)}  Projection       : {meta.get('source_fasta', '')}")
+    else:
+        print(f"    {_tick(False)}  Projection       : source files not available")
     if has_genblast:
         src = meta.get("uniprot_fasta") or f"fetch taxon {meta.get('uniprot_taxon_id')}"
-        print(f"    Protein homol : {src}")
+        print(f"    {_tick(True)}  Protein homology : {src}")
+    else:
+        print(f"    {_tick(False)}  Protein homology : no UniProt source")
     if meta.get("igtr_fasta"):
-        print(f"    IGTR          : {meta['igtr_fasta']}")
-    if meta["refseq_accession"]:
-        print(f"    RefSeq import : {meta['refseq_accession']}")
+        print(f"    {_tick(True)}  IG/TR            : {meta['igtr_fasta']}")
+    else:
+        print(f"    {_tick(False)}  IG/TR            : not configured")
+    if has_ncrna:
+        print(f"    {_tick(True)}  Short ncRNA      : Rfam + miRNA")
+    else:
+        print(f"    {_tick(False)}  Short ncRNA      : Rfam CM not found")
+    if meta.get("refseq_accession"):
+        print(f"    {_tick(True)}  RefSeq import    : {meta['refseq_accession']}")
+    else:
+        print(f"    {_tick(False)}  RefSeq import    : no RefSeq accession")
     print(f"\n  Layer priorities : {layer_prios_json}")
     print(f"\n  Stable ID prefix : {meta['stable_id_prefix']}")
     print(f"  Stable ID start  : {meta['stable_id_start']}")
