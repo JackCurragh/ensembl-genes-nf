@@ -826,6 +826,81 @@ process GFF3_TO_CORE {
 }
 
 // ---------------------------------------------------------------------------
+// QC report — aggregate all rejection TSVs into one master report
+// ---------------------------------------------------------------------------
+// Every filtering step (filter_stringtie, validate_models, rnaseq_qc, etc.)
+// writes a *.rejected.tsv with columns:
+//   stage, item_type, item_id, reason, threshold_name, threshold_value, observed_value
+//
+// COLLECT_QC_REPORT globs for all such files under params.outdir once the
+// finalise step is done and concatenates them, deduplicating the header.
+// The report is written to <outdir>/qc_reports/master_rejection_log.tsv.
+
+process COLLECT_QC_REPORT {
+    label 'process_single'
+
+    conda "conda-forge::python=3.11"
+    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
+        'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
+        'biocontainers/python:3.11--h2ad013b_0_cp311' }"
+
+    publishDir path: "${params.outdir}/qc_reports", mode: 'copy', overwrite: true
+
+    input:
+    val  sentinel   // depends on finalise step so report runs last
+    val  outdir
+
+    output:
+    path 'master_rejection_log.tsv', emit: report
+
+    script:
+    """
+    python3 - <<'PYEOF'
+import glob, csv, os, sys
+
+outdir = '${outdir}'
+tsv_files = sorted(glob.glob(os.path.join(outdir, '**', '*.rejected.tsv'), recursive=True))
+
+header = ['stage','item_type','item_id','reason','threshold_name','threshold_value','observed_value']
+rows   = []
+
+for f in tsv_files:
+    try:
+        with open(f) as fh:
+            reader = csv.DictReader(fh, delimiter='\\t')
+            for row in reader:
+                rows.append([row.get(c, '') for c in header])
+    except Exception as e:
+        print(f"WARN: could not read {f}: {e}", file=sys.stderr)
+
+with open('master_rejection_log.tsv', 'w', newline='') as fh:
+    writer = csv.writer(fh, delimiter='\\t')
+    writer.writerow(header)
+    writer.writerows(rows)
+
+print(f"QC report: {len(rows)} rejection events from {len(tsv_files)} log files → master_rejection_log.tsv",
+      file=sys.stderr)
+
+# Print a grouped summary
+by_stage = {}
+for row in rows:
+    key = (row[0], row[3])   # stage + reason
+    by_stage[key] = by_stage.get(key, 0) + 1
+if by_stage:
+    print("\\nRejection summary:", file=sys.stderr)
+    for (stage, reason), count in sorted(by_stage.items(), key=lambda x: -x[1]):
+        print(f"  {count:>6}  [{stage}] {reason}", file=sys.stderr)
+PYEOF
+    """
+
+    stub:
+    """
+    printf 'stage\\titem_type\\titem_id\\treason\\tthreshold_name\\tthreshold_value\\tobserved_value\\n' \
+        > master_rejection_log.tsv
+    """
+}
+
+// ---------------------------------------------------------------------------
 // Main workflow
 // ---------------------------------------------------------------------------
 
@@ -962,4 +1037,12 @@ workflow {
     FINALISE_GENESET.out.gff3_path.map { it.trim() }.subscribe { path ->
         log.info "\n  ✓ Final annotation: ${path}\n"
     }
+
+    // ── Stage 8: Collect QC rejection report ─────────────────────────────────
+    // Runs after FINALISE_GENESET so all rejection TSVs have been written.
+    // Globs <outdir>/**/*.rejected.tsv and concatenates into one master log.
+    COLLECT_QC_REPORT(
+        FINALISE_GENESET.out.gff3_path,   // sentinel — ensures this runs last
+        params.outdir
+    )
 }
