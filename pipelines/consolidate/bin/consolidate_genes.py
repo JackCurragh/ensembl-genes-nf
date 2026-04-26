@@ -43,15 +43,17 @@ from typing import Dict, List, Optional, Tuple
 
 @dataclass
 class Transcript:
-    seqname: str
-    start:   int    # 1-based
-    end:     int
-    strand:  str
-    tx_id:   str
-    gene_id: str
-    biotype: str
-    priority: int
-    lines:   List[str] = field(default_factory=list)  # raw GFF3 lines
+    seqname:          str
+    start:            int    # 1-based
+    end:              int
+    strand:           str
+    tx_id:            str
+    gene_id:          str
+    biotype:          str
+    priority:         int
+    validation_score: float = 1.0   # from VALIDATE_MODELS; default 1.0 (unvalidated = keep)
+    structural_ok:    bool  = True   # from VALIDATE_MODELS; structural_ok=false → deprioritise
+    lines:            List[str] = field(default_factory=list)  # raw GFF3 lines
 
 
 # ---------------------------------------------------------------------------
@@ -91,16 +93,20 @@ def parse_gff3(path: str, priority: int) -> List[Transcript]:
                 tx_id   = attrs.get('ID', '')
                 gene_id = attrs.get('Parent', attrs.get('ID', ''))
                 if tx_id:
+                    val_score    = float(attrs.get('validation_score', '1.0'))
+                    struct_ok    = attrs.get('structural_ok', 'true').lower() != 'false'
                     txs[tx_id] = Transcript(
-                        seqname  = cols[0],
-                        start    = int(cols[3]),
-                        end      = int(cols[4]),
-                        strand   = cols[6],
-                        tx_id    = tx_id,
-                        gene_id  = gene_id,
-                        biotype  = attrs.get('biotype', 'unknown'),
-                        priority = priority,
-                        lines    = [line],
+                        seqname          = cols[0],
+                        start            = int(cols[3]),
+                        end              = int(cols[4]),
+                        strand           = cols[6],
+                        tx_id            = tx_id,
+                        gene_id          = gene_id,
+                        biotype          = attrs.get('biotype', 'unknown'),
+                        priority         = priority,
+                        validation_score = val_score,
+                        structural_ok    = struct_ok,
+                        lines            = [line],
                     )
             elif feature in ('exon', 'CDS', 'UTR', 'five_prime_UTR', 'three_prime_UTR'):
                 parent = attrs.get('Parent', '')
@@ -154,9 +160,12 @@ def select_from_cluster(cluster_txs: List[Transcript]) -> List[Transcript]:
     """
     For one genomic locus:
     1. Sort transcripts by priority (ascending = higher priority first).
-    2. Keep all transcripts from the highest-priority layer present.
-    3. For each lower-priority transcript, suppress it if it overlaps
-       any already-retained transcript; otherwise keep it.
+    2. Within the same priority layer, prefer models with higher validation_score.
+       Structurally broken models (structural_ok=false) are deprioritised but not
+       discarded if they are the only evidence at a locus.
+    3. Keep all transcripts from the highest-priority layer present (sorted by score).
+    4. For each lower-priority transcript, suppress it if it overlaps any already-
+       retained transcript; otherwise keep it (filling unannotated loci).
     """
     if not cluster_txs:
         return []
@@ -164,9 +173,16 @@ def select_from_cluster(cluster_txs: List[Transcript]) -> List[Transcript]:
     best_priority = min(t.priority for t in cluster_txs)
     retained: List[Transcript] = []
 
-    # Process priority layers in order
+    def _sort_key(t: Transcript):
+        # Within a layer: structural_ok first, then descending validation_score
+        return (0 if t.structural_ok else 1, -t.validation_score)
+
+    # Process priority layers in order (lowest integer = highest evidence quality)
     for priority in sorted({t.priority for t in cluster_txs}):
-        layer_txs = [t for t in cluster_txs if t.priority == priority]
+        layer_txs = sorted(
+            [t for t in cluster_txs if t.priority == priority],
+            key=_sort_key,
+        )
         for tx in layer_txs:
             if priority == best_priority:
                 retained.append(tx)
