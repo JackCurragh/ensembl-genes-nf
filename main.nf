@@ -606,6 +606,71 @@ process REFSEQ_IMPORT {
 }
 
 // ---------------------------------------------------------------------------
+// Validate models — score every annotation source before consolidation
+// ---------------------------------------------------------------------------
+// Runs structural sanity checks, optional splice-junction support scoring,
+// and optional DIAMOND blastp per source GFF3.  Outputs scored GFF3s (one
+// per source) with validation_score + structural_ok attributes that the
+// consolidation step uses to break within-layer tie-breaks.
+//
+// NOTE: STAR SJ.out.tab wiring is not yet plumbed through the master
+// workflow (would require RNASEQ to emit its SJ directory as a second
+// output channel).  Structural + DIAMOND validation runs unconditionally;
+// splice-junction support scoring can be added as a follow-up.
+
+process VALIDATE_MODELS_ALL {
+    label 'process_launcher'
+
+    input:
+    val gff3_paths      // List<String> — raw annotation GFF3 absolute paths
+    val repeat_outdir   // repeat-masking outdir (to resolve softmasked genome)
+
+    output:
+    stdout emit: gff3_paths_csv   // comma-separated list of scored GFF3 paths
+
+    script:
+    def gff3_list  = gff3_paths instanceof List
+        ? gff3_paths.collect { it.trim() }.join(',')
+        : gff3_paths.toString().trim()
+    def softmasked = "${repeat_outdir}/genome/${assembly_id()}_genomic.softmasked.fa"
+    def prot_arg   = params.uniprot_fasta ? "--protein_db ${params.uniprot_fasta}" : ''
+    def manifest   = "${stage_outdir('validate_models')}/validate_models/output_manifest.json"
+    def vm_args    = [
+        "--gff3_files    '${gff3_list}'",
+        "--genome_fasta  ${softmasked}",
+        prot_arg,
+    ].findAll { it }
+    """
+    ${nf_run('validate_models', vm_args)}
+
+    # Extract all scored GFF3 paths from manifest → comma-sep on stdout
+    python3 - <<'PYEOF'
+import json, sys, os
+manifest = '${manifest}'
+if not os.path.exists(manifest):
+    print(f"ERROR: validate_models manifest not found: {manifest}", file=sys.stderr)
+    sys.exit(1)
+with open(manifest) as fh:
+    data = json.load(fh)
+paths = [o['path'] for o in data.get('outputs', []) if o.get('type') == 'gff3']
+if not paths:
+    print("ERROR: no GFF3 outputs in validate_models manifest", file=sys.stderr)
+    sys.exit(1)
+print(','.join(paths), end='')
+PYEOF
+    """
+
+    stub:
+    // In stub mode, pass the original GFF3 paths through unchanged
+    def gff3_list = gff3_paths instanceof List
+        ? gff3_paths.collect { it.trim() }.join(',')
+        : gff3_paths.toString().trim()
+    """
+    printf '%s' '${gff3_list}'
+    """
+}
+
+// ---------------------------------------------------------------------------
 // Consolidate — waits for all annotation layers
 // ---------------------------------------------------------------------------
 
@@ -835,9 +900,24 @@ workflow {
         ch_evidence_gff3 = ch_evidence_gff3.mix(REFSEQ_IMPORT.out.gff3_path.map { it.trim() })
     }
 
+    // ── Stage 3.5: Validate and score annotation models ──────────────────
+    // Structural sanity + optional DIAMOND protein validation per source.
+    // Outputs scored GFF3s (validation_score / structural_ok attributes)
+    // that consolidation uses to rank models within each priority layer.
+    VALIDATE_MODELS_ALL(
+        ch_evidence_gff3.collect(),
+        ch_repeat_outdir
+    )
+
+    // Split comma-sep output back into individual GFF3 path strings
+    ch_scored_gff3 = VALIDATE_MODELS_ALL.out.gff3_paths_csv
+        .map    { csv -> csv.trim().split(',') as List }
+        .flatMap { it }
+        .filter  { it }   // drop any empty strings from edge-case splitting
+
     // ── Stage 4: Consolidate ──────────────────────────────────────────────
     CONSOLIDATE(
-        ch_evidence_gff3.collect(),
+        ch_scored_gff3.collect(),
         layer_prios
     )
 
