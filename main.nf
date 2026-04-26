@@ -121,6 +121,8 @@ params.rfam_cm                   = null
 params.mirna_fasta               = null
 params.source_fasta              = null
 params.source_gff3               = null
+// Pangenome projection (runs alongside chain-based projection for comparison)
+params.pangenome_tool_dir        = null   // path to pre-cloned ensembl-genes pangenome branch
 params.assembly_refseq_accession = null
 params.repbase_library           = 'vertebrates'
 params.custom_repeat_library     = null
@@ -247,7 +249,8 @@ def default_layer_priorities(Map stages) {
     if (stages.long_read)   prio['long_read']   = 0
     if (stages.targeted)    prio['best_targeted'] = 1
     if (stages.rnaseq)      prio['rnaseq']       = 2
-    if (stages.projection)  prio['projection']   = 3
+    if (stages.projection)           prio['projection']            = 3
+    if (stages.pangenome_projection) prio['pangenome_projection']  = 3  // same tier as chain-based
     if (stages.refseq)      prio['refseq_import'] = 4
     prio['ab_initio'] = 5
     if (stages.genblast)    prio['genblast_homology'] = 6
@@ -451,6 +454,45 @@ process PROJECTION {
     printf '##gff-version 3\\n' > ${d}/projection/projected.gff3
     echo '{"pipeline":"projection","outputs":[{"type":"gff3","path":"${d}/projection/projected.gff3"}]}' > ${d}/output_manifest.json
     python3 -c "print('${d}/projection/projected.gff3', end='')"
+    """
+}
+
+// Pangenome projection — runs minimap2 in-process, no pre-built chain needed.
+// Produces biotype=projected_transcript with extra attributes mapping_identity
+// and mapping_status for comparison against the chain-based PROJECTION output.
+// Both outputs flow into VALIDATE_MODELS_ALL → CONSOLIDATE so they compete
+// on equal terms; validation scores will reveal which approach wins per locus.
+process PANGENOME_PROJECTION {
+    label 'process_launcher'
+    input:
+    val repeat_outdir
+
+    output:
+    stdout emit: gff3_path
+
+    script:
+    def softmasked = "${repeat_outdir}/genome/${assembly_id()}_genomic.softmasked.fa"
+    def tool_arg   = params.pangenome_tool_dir
+        ? "--pangenome_tool_dir ${params.pangenome_tool_dir}"
+        : ''
+    def manifest   = "${stage_outdir('pangenome_projection')}/pangenome_projection/output_manifest.json"
+    """
+    ${nf_run('pangenome_projection', [
+        "--source_fasta ${params.source_fasta}",
+        "--source_gff3  ${params.source_gff3}",
+        "--target_fasta ${softmasked}",
+        tool_arg,
+    ].findAll { it })}
+    ${extract_gff3_from_manifest(manifest)}
+    """
+
+    stub:
+    def d = stage_outdir('pangenome_projection')
+    """
+    mkdir -p ${d}/pangenome_projection
+    printf '##gff-version 3\\n' > ${d}/pangenome_projection/pangenome_projected.gff3
+    echo '{"pipeline":"pangenome_projection","outputs":[{"type":"gff3","path":"${d}/pangenome_projection/pangenome_projected.gff3"}]}' > ${d}/pangenome_projection/output_manifest.json
+    python3 -c "print('${d}/pangenome_projection/pangenome_projected.gff3', end='')"
     """
 }
 
@@ -910,14 +952,15 @@ workflow {
 
     // Determine which stages are enabled (used for layer priority auto-generation)
     def stages = [
-        rnaseq:     params.sample_sheet || params.rnaseq_bioproject || params.rnaseq_run_accessions,
-        long_read:  params.long_read_sample_sheet || params.long_read_bioproject,
-        targeted:   params.cdna_fasta || params.protein_fasta,
-        genblast:   params.uniprot_fasta || params.uniprot_taxon_id,
-        projection: params.source_fasta && params.source_gff3,
-        ncrna:      params.rfam_cm,
-        igtr:       params.igtr_proteins,
-        refseq:     params.assembly_refseq_accession,
+        rnaseq:               params.sample_sheet || params.rnaseq_bioproject || params.rnaseq_run_accessions,
+        long_read:            params.long_read_sample_sheet || params.long_read_bioproject,
+        targeted:             params.cdna_fasta || params.protein_fasta,
+        genblast:             params.uniprot_fasta || params.uniprot_taxon_id,
+        projection:           params.source_fasta && params.source_gff3,
+        pangenome_projection: params.source_fasta && params.source_gff3,  // always alongside chain-based
+        ncrna:                params.rfam_cm,
+        igtr:                 params.igtr_proteins,
+        refseq:               params.assembly_refseq_accession,
     ]
     def layer_prios = params.layer_priorities ?: default_layer_priorities(stages)
 
@@ -949,6 +992,13 @@ workflow {
     if (stages.projection) {
         PROJECTION(ch_repeat_outdir)
         ch_evidence_gff3 = ch_evidence_gff3.mix(PROJECTION.out.gff3_path.map { it.trim() })
+
+        // Pangenome projection runs in parallel for side-by-side comparison.
+        // Both the chain-based and pangenome outputs enter VALIDATE_MODELS_ALL
+        // and CONSOLIDATE with the same layer priority; validation scores will
+        // reveal which approach produces better models per locus.
+        PANGENOME_PROJECTION(ch_repeat_outdir)
+        ch_evidence_gff3 = ch_evidence_gff3.mix(PANGENOME_PROJECTION.out.gff3_path.map { it.trim() })
     }
 
     // Ab initio always runs
