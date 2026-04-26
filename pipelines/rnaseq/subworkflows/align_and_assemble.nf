@@ -16,7 +16,9 @@ workflow ALIGN_AND_ASSEMBLE {
     main:
     ch_versions = Channel.empty()
 
-    STAR_ALIGN(samples, star_index)
+    // .first() converts the queue channel to a value channel so the index
+    // directory is broadcast to every sample rather than consumed by the first.
+    STAR_ALIGN(samples, star_index.first())
     ch_versions = ch_versions.mix(STAR_ALIGN.out.versions)
 
     STRINGTIE(STAR_ALIGN.out.bam)

@@ -33,11 +33,23 @@ process STAR_ALIGN {
     def reads_arg = reads instanceof List ? reads.join(' ') : reads
     def pe_flag   = (reads instanceof List && reads.size() > 1) ? '' : '--readFilesIn'
     """
+    # Decompress reads if gzipped — bgzip reads both gzip and bgzip format.
+    # This avoids --readFilesCommand quoting issues across Linux/macOS conda envs.
+    decomp_reads=""
+    for f in ${reads_arg}; do
+        if [[ "\$f" == *.gz ]]; then
+            out="\${f%.gz}"
+            bgzip -d -c "\$f" > "\$out"
+            decomp_reads="\$decomp_reads \$out"
+        else
+            decomp_reads="\$decomp_reads \$f"
+        fi
+    done
+
     STAR \\
         --runThreadN     ${task.cpus} \\
         --genomeDir      ${index_dir} \\
-        --readFilesIn    ${reads_arg} \\
-        --readFilesCommand zcat \\
+        --readFilesIn    \${decomp_reads} \\
         --outSAMtype     BAM SortedByCoordinate \\
         --outSAMstrandField intronMotif \\
         --outSAMattributes NH HI AS NM \\

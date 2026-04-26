@@ -18,7 +18,7 @@ process STAR_INDEX {
 
     input:
     path genome_fasta
-    path gtf           // optional annotation for junction database; pass [] to skip
+    path gtf           // optional annotation; pass assets/no_annotation.gtf (empty) to skip
 
     output:
     path "star_index/", emit: index
@@ -29,7 +29,8 @@ process STAR_INDEX {
 
     script:
     def args     = task.ext.args ?: ''
-    def gtf_arg  = gtf ? "--sjdbGTFfile ${gtf} --sjdbOverhang ${params.sjdb_overhang}" : ''
+    // Empty sentinel file (assets/no_annotation.gtf, size 0) means: skip junction DB.
+    def gtf_arg  = (gtf.size() > 0) ? "--sjdbGTFfile ${gtf} --sjdbOverhang ${params.sjdb_overhang}" : ''
     """
     mkdir -p star_index
     STAR \\

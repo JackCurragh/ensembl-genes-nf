@@ -94,24 +94,42 @@ workflow {
     // ── Step 0: Resolve sample sheet (fetch from ENA if needed) ──────────
 
     if (params.sample_sheet) {
-        ch_sample_sheet = Channel.of(file(params.sample_sheet, checkIfExists: true))
+        // parse_sample_sheet returns a channel directly — no flatMap needed.
+        ch_samples = parse_sample_sheet(params.sample_sheet)
     } else {
-        // Fetch from ENA by BioProject or run accessions
+        // Fetch from ENA by BioProject or run accessions.
+        // FETCH_READS_FROM_ENA emits the path to the generated CSV; we then
+        // parse it. Because parse_sample_sheet returns a channel, we use
+        // switchMap (map + flatten via Channel.from) to handle the async path.
         def accession = params.rnaseq_bioproject ?: params.rnaseq_run_accessions
         FETCH_READS_FROM_ENA(accession)
-        ch_sample_sheet = FETCH_READS_FROM_ENA.out.sample_sheet
+        ch_samples = FETCH_READS_FROM_ENA.out.sample_sheet
+            .flatMap { sheet ->
+                // Read CSV rows synchronously inside flatMap so the closure
+                // returns a Collection (not a Channel), which flatMap can flatten.
+                def rows = []
+                new File(sheet.toString()).splitEachLine(',') { parts ->
+                    // Skip header
+                    if (parts[0] == 'id') return
+                    def meta  = [id: parts[0], strandedness: parts.size() > 3 ? parts[3] : 'unstranded']
+                    def reads = (parts.size() > 2 && parts[2])
+                        ? [file(parts[1]), file(parts[2])]
+                        : [file(parts[1])]
+                    rows << [meta, reads]
+                }
+                rows
+            }
     }
-
-    ch_samples = ch_sample_sheet.flatMap { sheet -> parse_sample_sheet(sheet.toString()) }
 
     // ── Step 1: Build or use existing STAR index ──────────────────────────
 
     if (params.star_index) {
         ch_star_index = Channel.of(file(params.star_index, checkIfExists: true, type: 'dir'))
     } else {
+        // Pass actual GTF when provided; empty sentinel otherwise (size 0 → module skips sjdb).
         ch_gtf = params.annotation_gtf
             ? file(params.annotation_gtf, checkIfExists: true)
-            : file('NO_FILE', checkIfExists: false)
+            : file("${projectDir}/../../assets/no_annotation.gtf", checkIfExists: true)
         STAR_INDEX(
             file(params.genome_fasta, checkIfExists: true),
             ch_gtf
