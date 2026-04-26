@@ -127,7 +127,8 @@ class CmsearchHit:
         )
 
 
-def parse_tblout(path: str, max_evalue: float, min_score: float) -> list[CmsearchHit]:
+def parse_tblout(path: str, max_evalue: float, min_score: float,
+                 qc_log=None) -> list[CmsearchHit]:
     hits: list[CmsearchHit] = []
     # Support gzipped tblout (cmsearch can output .tbl.gz)
     opener = _open(path)
@@ -136,7 +137,18 @@ def parse_tblout(path: str, max_evalue: float, min_score: float) -> list[Cmsearc
             if isinstance(line, bytes):
                 line = line.decode()
             hit = CmsearchHit.from_line(line)
-            if hit and hit.evalue <= max_evalue and hit.score >= min_score:
+            if hit is None:
+                continue
+            item_id = f"{hit.seqname}:{hit.seq_from}-{hit.seq_to}({hit.cm_name})"
+            if hit.score < min_score:
+                if qc_log:
+                    qc_log.reject("transcript", item_id, "low_rfam_score",
+                                  "ncrna_min_score", min_score, round(hit.score, 3))
+            elif hit.evalue > max_evalue:
+                if qc_log:
+                    qc_log.reject("transcript", item_id, "high_rfam_evalue",
+                                  "ncrna_max_evalue", max_evalue, hit.evalue)
+            else:
                 hits.append(hit)
     return hits
 
@@ -157,7 +169,8 @@ class BlastHit:
     strand: str = '+'  # derived from sstart/send
 
 
-def parse_blast_tabular(path: str, min_pident: float, max_evalue: float) -> list[BlastHit]:
+def parse_blast_tabular(path: str, min_pident: float, max_evalue: float,
+                        qc_log=None) -> list[BlastHit]:
     hits: list[BlastHit] = []
     with open(path) as fh:
         for line in fh:
@@ -175,7 +188,16 @@ def parse_blast_tabular(path: str, min_pident: float, max_evalue: float) -> list
                 bitscore = float(cols[11])
             except ValueError:
                 continue
-            if pident < min_pident or evalue > max_evalue:
+            item_id = f"{cols[0]}:{cols[1]}"
+            if pident < min_pident:
+                if qc_log:
+                    qc_log.reject("transcript", item_id, "low_pid",
+                                  "ncrna_blast_min_pid", min_pident, round(pident, 2))
+                continue
+            if evalue > max_evalue:
+                if qc_log:
+                    qc_log.reject("transcript", item_id, "high_rfam_evalue",
+                                  "ncrna_blast_max_evalue", max_evalue, evalue)
                 continue
             strand = '+' if sstart <= send else '-'
             if strand == '-':
@@ -286,14 +308,25 @@ def main():
     parser.add_argument('--blast-min-pid',   type=float, default=80.0, help='Min BLASTN identity for miRNA')
     parser.add_argument('--blast-max-evalue',type=float, default=0.01, help='Max BLASTN e-value for miRNA')
     parser.add_argument('--sample-id',       default='sample')
+    parser.add_argument('--rejected-tsv',    default=None,
+                        help='Write rejection log TSV to this path')
     args = parser.parse_args()
 
-    rfam_hits = parse_tblout(args.tblout, args.max_evalue, args.min_score)
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("short_ncrna", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
+
+    rfam_hits = parse_tblout(args.tblout, args.max_evalue, args.min_score, qc_log=qc_log)
     print(f'[filter_ncrna] {len(rfam_hits)} Rfam hits after filtering', flush=True)
 
     blast_hits: list[BlastHit] = []
     if args.blast:
-        blast_hits = parse_blast_tabular(args.blast, args.blast_min_pid, args.blast_max_evalue)
+        blast_hits = parse_blast_tabular(args.blast, args.blast_min_pid, args.blast_max_evalue,
+                                         qc_log=qc_log)
         print(f'[filter_ncrna] {len(blast_hits)} miRNA BLAST hits after filtering', flush=True)
 
     counts = write_gff3(rfam_hits, blast_hits, args.out, args.sample_id)
@@ -301,6 +334,10 @@ def main():
     print(f'[filter_ncrna] Wrote {total} ncRNA models to {args.out}', flush=True)
     for bt in sorted(counts):
         print(f'  {bt}: {counts[bt]}', flush=True)
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':

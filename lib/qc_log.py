@@ -29,6 +29,9 @@ low_splice_support      — splice_support_pct below threshold
 low_stringtie_coverage  — StringTie cov attribute below threshold
 short_transcript        — transcript length below minimum
 few_exons               — exon count below minimum
+low_rfam_score          — cmsearch bit score below minimum
+high_rfam_evalue        — cmsearch or BLAST e-value above maximum
+cluster_suppressed      — model suppressed by higher-priority evidence at same locus
 
 Usage
 ─────

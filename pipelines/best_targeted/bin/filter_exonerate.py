@@ -244,6 +244,8 @@ def main():
     ap.add_argument('--query_fasta',   default=None,
                     help='FASTA of query sequences (for accurate coverage)')
     ap.add_argument('--sample_id',     default='chunk')
+    ap.add_argument('--rejected-tsv',  default=None,
+                    help='Write rejection log TSV to this path')
     args = ap.parse_args()
 
     query_lengths = load_query_lengths(args.query_fasta)
@@ -253,12 +255,34 @@ def main():
     for hit in hits:
         _compute_stats(hit, query_lengths)
 
-    passing = [h for h in hits
-               if h.coverage >= args.min_coverage and h.pid >= args.min_pid]
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("best_targeted", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
+
+    passing = []
+    for h in hits:
+        if h.coverage < args.min_coverage:
+            if qc_log:
+                qc_log.reject("transcript", h.query_id, "low_coverage",
+                               "min_coverage", args.min_coverage, round(h.coverage, 2))
+        elif h.pid < args.min_pid:
+            if qc_log:
+                qc_log.reject("transcript", h.query_id, "low_pid",
+                               "min_pid", args.min_pid, round(h.pid, 2))
+        else:
+            passing.append(h)
 
     n = write_gff3(passing, args.out, args.sample_id)
     print(f'filter_exonerate: {len(hits)} hits parsed, {n} passed filters '
           f'(cov>={args.min_coverage}, pid>={args.min_pid})', file=sys.stderr)
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':

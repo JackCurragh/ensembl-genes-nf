@@ -222,7 +222,17 @@ def main():
     ap.add_argument('--out',          required=True)
     ap.add_argument('--min_coverage', type=float, default=50.0)
     ap.add_argument('--min_pid',      type=float, default=50.0)
+    ap.add_argument('--rejected-tsv', default=None,
+                    help='Write rejection log TSV to this path')
     args = ap.parse_args()
+
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("best_targeted", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
 
     cdna_genes    = parse_gff3(args.cdna_gff3)    if args.cdna_gff3    else []
     protein_genes = parse_gff3(args.protein_gff3) if args.protein_gff3 else []
@@ -230,17 +240,40 @@ def main():
     all_genes = cdna_genes + protein_genes
 
     # Apply final thresholds
-    all_genes = [g for g in all_genes
-                 if g.coverage >= args.min_coverage and g.pid >= args.min_pid]
+    threshold_passing = []
+    for g in all_genes:
+        if g.coverage < args.min_coverage:
+            if qc_log:
+                qc_log.reject("transcript", g.query_id, "low_coverage",
+                               "min_coverage", args.min_coverage, round(g.coverage, 2))
+        elif g.pid < args.min_pid:
+            if qc_log:
+                qc_log.reject("transcript", g.query_id, "low_pid",
+                               "min_pid", args.min_pid, round(g.pid, 2))
+        else:
+            threshold_passing.append(g)
 
-    clusters   = cluster(all_genes)
+    clusters   = cluster(threshold_passing)
     selected   = []
+    selected_ids = set()
     for cl in clusters:
-        selected.extend(select_from_cluster(cl))
+        kept = select_from_cluster(cl)
+        kept_ids = {g.query_id for g in kept}
+        selected_ids.update(kept_ids)
+        for g in cl:
+            if g.query_id not in kept_ids and qc_log:
+                qc_log.reject("transcript", g.query_id, "cluster_suppressed",
+                               "analysis_priority", g.analysis_priority,
+                               f"superseded_by_{g.biotype}")
+        selected.extend(kept)
 
     n = write_best_gff3(selected, args.out)
     print(f'select_best_targeted: {len(cdna_genes)} cdna + {len(protein_genes)} protein genes; '
           f'{n} selected after clustering', file=sys.stderr)
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':

@@ -321,6 +321,7 @@ def project(
     source_txs:   List[SourceTranscript],
     chains:       List[Chain],
     min_coverage: float,
+    qc_log=None,
 ) -> List[dict]:
     t_index = _build_t_index(chains)
     results = []
@@ -350,6 +351,9 @@ def project(
 
         coverage = _compute_coverage(tx.exons, proj_exons)
         if coverage < min_coverage:
+            if qc_log:
+                qc_log.reject("transcript", tx.tx_id, "low_coverage",
+                               "projection_min_coverage", min_coverage, round(coverage, 2))
             continue
 
         q_start = min(p[0] for p in valid_exons)
@@ -379,11 +383,21 @@ def main():
     ap.add_argument('--chain',        required=True)
     ap.add_argument('--out',          required=True)
     ap.add_argument('--min_coverage', type=float, default=50.0)
+    ap.add_argument('--rejected-tsv', default=None,
+                    help='Write rejection log TSV to this path')
     args = ap.parse_args()
+
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("projection", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
 
     chains     = parse_chain(args.chain)
     source_txs = parse_source_gff3(args.source_gff3)
-    projected  = project(source_txs, chains, args.min_coverage)
+    projected  = project(source_txs, chains, args.min_coverage, qc_log=qc_log)
     n          = write_projected_gff3(projected, args.out)
 
     print(
@@ -391,6 +405,10 @@ def main():
         f'{n} projected (min_cov={args.min_coverage})',
         file=sys.stderr
     )
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':

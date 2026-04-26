@@ -198,6 +198,7 @@ def write_gff3(
     sample_id: str,
     min_pid: float,
     min_cov: float,
+    qc_log=None,
 ) -> int:
     """
     Filter transcripts, assign biotypes, write GFF3 with gene/transcript/exon.
@@ -213,6 +214,19 @@ def write_gff3(
 
         for tid, tx_rec in transcripts.items():
             if not passes_filter(tx_rec, min_pid, min_cov):
+                if qc_log:
+                    try:
+                        pid = float(tx_rec.attrs.get('PID', 0))
+                        cov = float(tx_rec.attrs.get('Coverage', 0))
+                    except ValueError:
+                        pid = cov = 0.0
+                    prot_name = tx_rec.attrs.get('Name', tid)
+                    if pid < min_pid:
+                        qc_log.reject("transcript", prot_name, "low_pid",
+                                      "min_pid", min_pid, round(pid, 2))
+                    else:
+                        qc_log.reject("transcript", prot_name, "low_coverage",
+                                      "min_coverage", min_cov, round(cov, 2))
                 continue
 
             tx_exons = sorted(exons.get(tid, []), key=lambda r: r.start)
@@ -295,7 +309,17 @@ def main():
     parser.add_argument('--min-pid',      type=float, default=70.0, help='Min percent identity (default: 70)')
     parser.add_argument('--min-coverage', type=float, default=80.0, help='Min query coverage (default: 80)')
     parser.add_argument('--sample-id',    default='sample', help='Sample ID prefix for feature IDs')
+    parser.add_argument('--rejected-tsv', default=None,
+                        help='Write rejection log TSV to this path')
     args = parser.parse_args()
+
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("igtr", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
 
     print(f'[convert_genblast] Loading biotypes from {args.proteins}', flush=True)
     biotype_map = load_protein_biotypes(args.proteins)
@@ -309,9 +333,14 @@ def main():
         transcripts, exons, biotype_map,
         args.out, args.sample_id,
         args.min_pid, args.min_coverage,
+        qc_log=qc_log,
     )
     print(f'[convert_genblast] Wrote {n} models to {args.out} '
           f'(PID≥{args.min_pid}%, Coverage≥{args.min_coverage}%)', flush=True)
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':
