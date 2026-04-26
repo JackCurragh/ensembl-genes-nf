@@ -47,22 +47,29 @@ def _get(url: str, params: dict, retries: int = MAX_RETRIES) -> dict | list:
             time.sleep(RETRY_DELAY)
 
 
-def resolve_runs(accession: str) -> list[dict]:
-    """
-    Resolve a BioProject or comma-separated run accessions to a list of run dicts.
-    Each dict has: run_accession, fastq_ftp, library_layout, sample_accession.
-    """
+def _resolve_single(accession: str) -> list[dict]:
+    """Resolve one BioProject or one/more run accessions to run dicts."""
     FIELDS = "run_accession,fastq_ftp,fastq_md5,library_layout,library_source,sample_accession,instrument_platform,read_count"
 
-    # Comma-separated run accessions (SRR/ERR/DRR)
+    accession = accession.strip()
+
+    # Comma-separated run accessions (SRR/ERR/DRR) — query by individual accessions
     if re.match(r'^[SED]RR\d+', accession):
-        params = {
-            "accession": accession.split(',')[0],  # just use first for API call
-            "result":    "read_run",
-            "fields":    FIELDS,
-            "format":    "json",
-            "limit":     500,
-        }
+        # Each run must be queried individually; build a search query
+        run_ids = [a.strip() for a in accession.split(',') if a.strip()]
+        all_runs = []
+        for run_id in run_ids:
+            params = {
+                "accession": run_id,
+                "result":    "read_run",
+                "fields":    FIELDS,
+                "format":    "json",
+                "limit":     1,
+            }
+            data = _get(ENA_PORTAL_URL, params)
+            if isinstance(data, list):
+                all_runs.extend(data)
+        return all_runs
     elif re.match(r'^PRJ[NE][A-Z]\d+', accession) or re.match(r'^ERP\d+|SRP\d+', accession):
         params = {
             "accession": accession,
@@ -71,13 +78,38 @@ def resolve_runs(accession: str) -> list[dict]:
             "format":    "json",
             "limit":     1000,
         }
+        data = _get(ENA_PORTAL_URL, params)
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected ENA API response for {accession}: {data}")
+        return data
     else:
         raise ValueError(f"Unrecognised accession format: {accession!r}")
 
-    data = _get(ENA_PORTAL_URL, params)
-    if not isinstance(data, list):
-        raise RuntimeError(f"Unexpected ENA API response: {data}")
-    return data
+
+def resolve_runs(accession: str) -> list[dict]:
+    """
+    Resolve BioProject(s) or run accession(s) to a list of run dicts.
+    Accepts a comma-separated list of BioProject IDs (e.g. "PRJEB1234,PRJEB5678")
+    — all are fetched and combined, with duplicate run_accessions deduplicated.
+    Each returned dict has: run_accession, fastq_ftp, library_layout, sample_accession.
+    """
+    # Split on comma to handle multiple bioprojects / run lists
+    parts = [p.strip() for p in accession.split(',') if p.strip()]
+
+    # If all parts look like run accessions, treat as a run-accession list (single query)
+    if all(re.match(r'^[SED]RR\d+', p) for p in parts):
+        return _resolve_single(accession)  # pass joined string; handled inside
+
+    # Otherwise resolve each bioproject independently and merge
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for part in parts:
+        for run in _resolve_single(part):
+            rid = run.get("run_accession", "")
+            if rid and rid not in seen:
+                seen.add(rid)
+                merged.append(run)
+    return merged
 
 
 def get_tissue_label(sample_accession: str) -> str:
@@ -125,7 +157,15 @@ def main():
     parser.add_argument("--outdir",       required=True,  help="Output directory for FASTQ files")
     parser.add_argument("--max-runs",     type=int, default=50, help="Maximum number of runs to download")
     parser.add_argument("--strandedness", default="auto",  help="Strandedness override (forward/reverse/unstranded/auto)")
+    parser.add_argument("--platform",     nargs="+", default=["ILLUMINA"],
+                        help="One or more ENA instrument_platform values to keep "
+                             "(default: ILLUMINA). Use OXFORD_NANOPORE PACBIO_SMRT for long-read.")
+    parser.add_argument("--output-tsv",   default=None,
+                        help="If set, write a TSV sample sheet to this path (for long_read pipeline) "
+                             "instead of the default CSV (for rnaseq pipeline).")
     args = parser.parse_args()
+
+    platform_filter = set(args.platform)
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -134,15 +174,19 @@ def main():
     print(f"Resolving ENA accession: {args.accession}", file=sys.stderr)
     runs = resolve_runs(args.accession)
 
-    # Filter: Illumina short-read transcriptomic data only
+    # Filter at the run level by platform and library source
     runs = [
         r for r in runs
-        if r.get("instrument_platform", "ILLUMINA") == "ILLUMINA"
+        if r.get("instrument_platform", "") in platform_filter
         and r.get("library_source", "TRANSCRIPTOMIC") == "TRANSCRIPTOMIC"
     ]
 
     if not runs:
-        print("ERROR: no Illumina TRANSCRIPTOMIC short-read runs found for this accession", file=sys.stderr)
+        print(
+            f"ERROR: no TRANSCRIPTOMIC runs found for platforms {sorted(platform_filter)} "
+            f"in accession {args.accession!r}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if len(runs) > args.max_runs:
@@ -199,14 +243,34 @@ def main():
         print("ERROR: no reads could be downloaded", file=sys.stderr)
         sys.exit(1)
 
-    # Write sample sheet
-    sample_sheet = outdir / "sample_sheet.csv"
-    with open(sample_sheet, "w", newline="") as fh:
-        writer = csv.DictWriter(fh, fieldnames=["id", "fastq_1", "fastq_2", "strandedness"])
-        writer.writeheader()
-        writer.writerows(rows)
-
-    print(f"Sample sheet written: {sample_sheet} ({len(rows)} samples)", file=sys.stderr)
+    if args.output_tsv:
+        # Long-read TSV format: sample_name, fastq_file, instrument_platform
+        tsv_path = Path(args.output_tsv)
+        with open(tsv_path, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["sample_name", "fastq_file", "instrument_platform"],
+                                    delimiter="\t")
+            writer.writeheader()
+            for row in rows:
+                # Long-read is always single-file (no R1/R2 split)
+                platform = next(
+                    (r.get("instrument_platform", "PACBIO_SMRT")
+                     for r in runs if row["fastq_1"] and row["id"] in row["fastq_1"]),
+                    list(platform_filter)[0]
+                )
+                writer.writerow({
+                    "sample_name":         row["id"],
+                    "fastq_file":          row["fastq_1"],
+                    "instrument_platform": platform,
+                })
+        print(f"Long-read TSV written: {tsv_path} ({len(rows)} samples)", file=sys.stderr)
+    else:
+        # Short-read CSV for rnaseq pipeline
+        sample_sheet = outdir / "sample_sheet.csv"
+        with open(sample_sheet, "w", newline="") as fh:
+            writer = csv.DictWriter(fh, fieldnames=["id", "fastq_1", "fastq_2", "strandedness"])
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"Sample sheet written: {sample_sheet} ({len(rows)} samples)", file=sys.stderr)
 
 
 if __name__ == "__main__":

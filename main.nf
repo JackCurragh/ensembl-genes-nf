@@ -365,13 +365,19 @@ process LONG_READ {
     script:
     def softmasked = "${repeat_outdir}/genome/${assembly_id()}_genomic.softmasked.fa"
     def sheet_arg  = params.long_read_sample_sheet
-        ? "--sample_sheet        ${params.long_read_sample_sheet}"
-        : "--long_read_bioproject ${params.long_read_bioproject}"
+        ? "--sample_sheet           ${params.long_read_sample_sheet}"
+        : "--long_read_bioproject   ${params.long_read_bioproject}"
+    // protein_db is optional in long_read pipeline; wire uniprot FASTA if available
+    // (the long_read classify step uses it for DIAMOND model support scoring)
+    def prot_arg   = params.uniprot_fasta
+        ? "--protein_db ${stage_outdir('genblast_homology')}/diamond_db"
+        : ''
     def manifest   = "${stage_outdir('long_read')}/output_manifest.json"
     """
     ${nf_run('long_read', [
         "--genome_fasta ${softmasked}",
         sheet_arg,
+        prot_arg,
     ])}
     ${extract_gff3_from_manifest(manifest)}
     """
@@ -835,15 +841,30 @@ workflow {
         layer_prios
     )
 
-    // ── Stage 5: UTR addition ─────────────────────────────────────────────
-    UTR_ADDITION(
-        CONSOLIDATE.out.gff3_path.map { it.trim() },
-        ch_repeat_outdir
-    )
+    // ── Stage 5: UTR addition (only when transcript donors exist) ────────
+    // Donors: long-read > best_targeted > rnaseq, in that priority order.
+    // If none of these stages ran there are no UTR donors — skip cleanly.
+    def utr_donor_candidates = [
+        stages.long_read  ? "${stage_outdir('long_read')}/long_read/merged_long_read.gff3"       : null,
+        stages.targeted   ? "${stage_outdir('best_targeted')}/best_targeted/best_targeted.gff3"  : null,
+        stages.rnaseq     ? "${stage_outdir('rnaseq')}/rnaseq/merged_rnaseq.gff3"                : null,
+    ].findAll { it != null }
+
+    ch_pre_finalise_gff3 = CONSOLIDATE.out.gff3_path.map { it.trim() }
+
+    if (utr_donor_candidates) {
+        UTR_ADDITION(
+            ch_pre_finalise_gff3,
+            ch_repeat_outdir
+        )
+        ch_pre_finalise_gff3 = UTR_ADDITION.out.gff3_path.map { it.trim() }
+    } else {
+        log.warn "No UTR donors available (no RNA-seq, long-read, or best_targeted ran) — skipping UTR_ADDITION"
+    }
 
     // ── Stage 6: Finalise geneset ─────────────────────────────────────────
     FINALISE_GENESET(
-        UTR_ADDITION.out.gff3_path.map { it.trim() },
+        ch_pre_finalise_gff3,
         ch_repeat_outdir
     )
 
