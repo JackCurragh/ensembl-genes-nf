@@ -15,6 +15,7 @@ process FILTER_STRINGTIE {
 
     output:
     tuple val(meta), path("*.rnaseq.gff3"), emit: gff3
+    path  "*.rejected.tsv",                 emit: rejected, optional: true
     path  "versions.yml",                   emit: versions
 
     when:
@@ -24,8 +25,8 @@ process FILTER_STRINGTIE {
     def prefix   = task.ext.prefix ?: meta.id
     def args     = task.ext.args   ?: ''
     def min_cov  = params.stringtie_min_coverage ?: 2.0
-    def min_len  = params.rnaseq_min_length       ?: 200
-    def min_exon = params.rnaseq_min_exons        ?: 1
+    def min_len  = params.stringtie_min_length    ?: 200
+    def min_exon = params.stringtie_min_exons     ?: 1
     """
     filter_stringtie.py \\
         --gtf          ${gtf} \\
@@ -35,6 +36,7 @@ process FILTER_STRINGTIE {
         --min_coverage ${min_cov} \\
         --min_length   ${min_len} \\
         --min_exons    ${min_exon} \\
+        --rejected-tsv ${prefix}.rejected.tsv \\
         ${args}
 
     cat <<-END_VERSIONS > versions.yml

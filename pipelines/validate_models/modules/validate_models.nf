@@ -35,16 +35,21 @@ process VALIDATE_MODELS {
     output:
     tuple val(meta), path("*.scored.gff3"), emit: gff3
     tuple val(meta), path("*.scores.tsv"),  emit: scores
+    path "*.rejected.tsv",                  emit: rejected, optional: true
     path "versions.yml",                    emit: versions
 
     when:
     task.ext.when == null || task.ext.when
 
     script:
-    def args       = task.ext.args ?: ''
-    def prefix     = task.ext.prefix ?: meta.id
-    def sj_arg     = sj_tabs ? "--sj-tabs ${(sj_tabs instanceof List ? sj_tabs : [sj_tabs]).join(' ')}" : ''
-    def min_depth  = params.min_junction_depth ?: 3
+    def args          = task.ext.args ?: ''
+    def prefix        = task.ext.prefix ?: meta.id
+    def sj_arg        = sj_tabs ? "--sj-tabs ${(sj_tabs instanceof List ? sj_tabs : [sj_tabs]).join(' ')}" : ''
+    def min_depth     = params.min_junction_depth        ?: 3
+    def struct_pass   = params.structural_score_pass     ?: 0.7
+    def struct_weight = params.validation_struct_weight  ?: 0.4
+    def splice_weight = params.validation_splice_weight  ?: 0.6
+    def rejected_arg  = "--rejected-tsv ${prefix}.rejected.tsv"
     """
     # Index genome if not already indexed
     if [ ! -f ${genome_fasta}.fai ]; then
@@ -52,12 +57,16 @@ process VALIDATE_MODELS {
     fi
 
     validate_models.py \\
-        --gff3         ${gff3} \\
-        --genome       ${genome_fasta} \\
-        --out-gff3     ${prefix}.scored.gff3 \\
-        --out-tsv      ${prefix}.scores.tsv \\
-        --source-label ${prefix} \\
-        --min-depth    ${min_depth} \\
+        --gff3             ${gff3} \\
+        --genome           ${genome_fasta} \\
+        --out-gff3         ${prefix}.scored.gff3 \\
+        --out-tsv          ${prefix}.scores.tsv \\
+        --source-label     ${prefix} \\
+        --min-depth        ${min_depth} \\
+        --structural-pass  ${struct_pass} \\
+        --struct-weight    ${struct_weight} \\
+        --splice-weight    ${splice_weight} \\
+        ${rejected_arg} \\
         ${sj_arg} \\
         ${args}
 
