@@ -129,7 +129,112 @@ def get_augustus_species(taxon_id: int | None) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ENA data lookup (best-effort)
+# Transcriptomic registry lookup
+# ---------------------------------------------------------------------------
+def query_transcriptomic_registry(
+    taxon_id: int,
+    settings: dict,
+    host: str | None,
+    port: str | None,
+    min_unique_mapping_pct: float = 60.0,
+) -> dict[str, list[str]]:
+    """
+    Query gb_transcriptomic_registry on the same server as gb_assembly_metadata
+    (GBS1 / GBP1) for QC-approved RNA-seq and long-read runs for this taxon.
+
+    Returns:
+      {
+        "rnaseq":   ["SRR1", "SRR2", ...],   # Illumina, qc_status=ALIGNED
+        "longread": ["SRR3", "SRR4", ...],   # ONT / PacBio, qc_status=ALIGNED
+        "last_check": "2026-01-08" | None,
+      }
+    Falls back to empty lists on any error (network, missing table, etc.).
+
+    The min_unique_mapping_pct threshold (default 60 %) further filters runs in
+    the align table — runs that mapped poorly to any previous assembly are excluded.
+    """
+    if not host or not port:
+        print(
+            "  [INFO] GBS1/GBP1 env vars not set — skipping transcriptome registry query",
+            file=sys.stderr,
+        )
+        return {"rnaseq": [], "longread": [], "last_check": None}
+
+    try:
+        import pymysql
+        import pymysql.cursors
+    except ImportError:
+        print(
+            "  [INFO] pymysql not installed — skipping transcriptome registry query",
+            file=sys.stderr,
+        )
+        return {"rnaseq": [], "longread": [], "last_check": None}
+
+    try:
+        conn = pymysql.connect(
+            host=host,
+            port=int(port),
+            user=settings.get("user_r", settings.get("user", "")),
+            password=settings.get("password", ""),
+            database="gb_transcriptomic_registry",
+            charset="utf8",
+            connect_timeout=15,
+        )
+    except Exception as exc:
+        print(f"  [WARN] Could not connect to gb_transcriptomic_registry: {exc}", file=sys.stderr)
+        return {"rnaseq": [], "longread": [], "last_check": None}
+
+    rnaseq: list[str]   = []
+    longread: list[str] = []
+    last_check: str | None = None
+
+    try:
+        with conn.cursor(pymysql.cursors.DictCursor) as cur:
+            # When was this taxon last checked against ENA?
+            cur.execute(
+                "SELECT last_check FROM meta WHERE taxon_id = %s LIMIT 1",
+                (taxon_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                last_check = str(row["last_check"])
+
+            # Runs with acceptable mapping QC — filter by uniquely_mapped_reads_percentage
+            # where an alignment record exists.  Runs with no align record (never aligned
+            # to any assembly) are still included if their qc_status is ALIGNED.
+            cur.execute(
+                """
+                SELECT DISTINCT r.run_accession, r.platform
+                FROM run r
+                LEFT JOIN align a ON a.run_id = r.run_id
+                WHERE r.taxon_id = %s
+                  AND r.qc_status = 'ALIGNED'
+                  AND r.read_type = 'RNA-Seq'
+                  AND (
+                      a.align_id IS NULL
+                      OR a.uniquely_mapped_reads_percentage >= %s
+                  )
+                ORDER BY r.run_id
+                """,
+                (taxon_id, min_unique_mapping_pct),
+            )
+            for row in cur.fetchall():
+                acc      = row["run_accession"]
+                platform = row["platform"]
+                if platform == "ILLUMINA":
+                    rnaseq.append(acc)
+                elif platform in ("OXFORD_NANOPORE", "PACBIO_SMRT"):
+                    longread.append(acc)
+    except Exception as exc:
+        print(f"  [WARN] Transcriptome registry query failed: {exc}", file=sys.stderr)
+    finally:
+        conn.close()
+
+    return {"rnaseq": rnaseq, "longread": longread, "last_check": last_check}
+
+
+# ---------------------------------------------------------------------------
+# ENA data lookup (best-effort fallback)
 # ---------------------------------------------------------------------------
 def _ena_search(taxon_id: int, platform_filter, strategy_filter) -> list[str]:
     """
@@ -352,24 +457,56 @@ def resolve_metadata_from_registry(
     # ── Augustus species model ────────────────────────────────────────────────
     augustus_species = get_augustus_species(taxon_id)
 
+    # ── Transcriptome registry ────────────────────────────────────────────────
+    # Query gb_transcriptomic_registry for QC-approved run accessions.
+    # These are preferred over a blind ENA bioproject search because they carry
+    # a uniquely_mapped_reads_percentage filter and qc_status=ALIGNED guarantee.
+    print("  Querying transcriptome registry...", file=sys.stderr)
+    txome = query_transcriptomic_registry(
+        taxon_id,
+        settings,
+        host=os.environ.get("GBS1"),
+        port=os.environ.get("GBP1"),
+    )
+    if txome["rnaseq"]:
+        print(
+            f"  Transcriptome registry: {len(txome['rnaseq'])} QC'd short-read runs "
+            f"(last updated: {txome['last_check'] or 'unknown'})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "  Transcriptome registry: no QC'd short-read runs — will fall back to ENA search",
+            file=sys.stderr,
+        )
+    if txome["longread"]:
+        print(
+            f"  Transcriptome registry: {len(txome['longread'])} QC'd long-read runs",
+            file=sys.stderr,
+        )
+
     return {
-        "assembly_name":    info["assembly_name"],
-        "species_name":     info["species_name"],
-        "taxon_id":         taxon_id,
-        "clade":            info.get("clade"),
-        "stable_id_prefix": stable_id_prefix,
-        "stable_id_start":  stable_id_start,
-        "augustus_species": augustus_species,
-        "repbase_library":  repbase_library,
-        "refseq_accession": refseq_accession,
-        "uniprot_fasta":    uniprot_fasta,
-        "uniprot_taxon_id": uniprot_taxon_id,
-        "igtr_fasta":       igtr_fasta,
-        "source_fasta":     source_fasta,
-        "source_gff3":      source_gff3,
-        "rfam_cm":          rfam_cm,
-        "mirna_fasta":      mirna_fasta,
-        "outdir":           outdir,
+        "assembly_name":     info["assembly_name"],
+        "species_name":      info["species_name"],
+        "taxon_id":          taxon_id,
+        "clade":             info.get("clade"),
+        "stable_id_prefix":  stable_id_prefix,
+        "stable_id_start":   stable_id_start,
+        "augustus_species":  augustus_species,
+        "repbase_library":   repbase_library,
+        "refseq_accession":  refseq_accession,
+        "uniprot_fasta":     uniprot_fasta,
+        "uniprot_taxon_id":  uniprot_taxon_id,
+        "igtr_fasta":        igtr_fasta,
+        "source_fasta":      source_fasta,
+        "source_gff3":       source_gff3,
+        "rfam_cm":           rfam_cm,
+        "mirna_fasta":       mirna_fasta,
+        "outdir":            outdir,
+        # Registry-sourced run accessions (comma-sep SRR/ERR IDs), preferred over
+        # bioproject-level ENA discovery; None if registry has nothing for this taxon.
+        "registry_rnaseq_runs":   ",".join(txome["rnaseq"])   if txome["rnaseq"]   else None,
+        "registry_longread_runs": ",".join(txome["longread"]) if txome["longread"] else None,
     }
 
 
@@ -381,23 +518,26 @@ def resolve_metadata_standalone(args) -> dict:
     rfam_cm     = RFAM_CM     if Path(RFAM_CM).exists()     else None
     mirna_fasta = MIRNA_FASTA if Path(MIRNA_FASTA).exists() else None
     return {
-        "assembly_name":    args.assembly_name,
-        "species_name":     args.species_name,
-        "taxon_id":         args.taxon_id,
-        "clade":            None,
-        "stable_id_prefix": args.stable_id_prefix or "",
-        "stable_id_start":  args.stable_id_start,
-        "augustus_species": augustus_species,
-        "repbase_library":  args.repbase_library,
-        "refseq_accession": args.refseq_accession,
-        "uniprot_fasta":    args.uniprot_fasta,
-        "uniprot_taxon_id": args.uniprot_taxon_id,
-        "igtr_fasta":       None,
-        "source_fasta":     args.source_fasta,
-        "source_gff3":      args.source_gff3,
-        "rfam_cm":          rfam_cm,
-        "mirna_fasta":      mirna_fasta,
-        "outdir":           args.outdir.rstrip("/"),
+        "assembly_name":          args.assembly_name,
+        "species_name":           args.species_name,
+        "taxon_id":               args.taxon_id,
+        "clade":                  None,
+        "stable_id_prefix":       args.stable_id_prefix or "",
+        "stable_id_start":        args.stable_id_start,
+        "augustus_species":       augustus_species,
+        "repbase_library":        args.repbase_library,
+        "refseq_accession":       args.refseq_accession,
+        "uniprot_fasta":          args.uniprot_fasta,
+        "uniprot_taxon_id":       args.uniprot_taxon_id,
+        "igtr_fasta":             None,
+        "source_fasta":           args.source_fasta,
+        "source_gff3":            args.source_gff3,
+        "rfam_cm":                rfam_cm,
+        "mirna_fasta":            mirna_fasta,
+        "outdir":                 args.outdir.rstrip("/"),
+        # No registry access in standalone mode
+        "registry_rnaseq_runs":   None,
+        "registry_longread_runs": None,
     }
 
 
@@ -638,6 +778,7 @@ def main() -> None:
     print(f"Augustus species model : {meta['augustus_species']}", file=sys.stderr)
 
     # ── Resolve RNA-seq ────────────────────────────────────────────────────────
+    # Priority: explicit CLI arg > transcriptome registry > ENA bioproject search
     rnaseq_nf_arg = ""
     has_rnaseq    = False
 
@@ -650,21 +791,29 @@ def main() -> None:
     elif args.rnaseq_run_accessions:
         rnaseq_nf_arg = f"--rnaseq_run_accessions     {args.rnaseq_run_accessions}"
         has_rnaseq    = True
+    elif meta.get("registry_rnaseq_runs"):
+        # Use QC-approved run list from genebuild transcriptome registry
+        runs = meta["registry_rnaseq_runs"]
+        n    = len(runs.split(","))
+        print(f"  Using {n} QC'd short-read runs from genebuild registry", file=sys.stderr)
+        rnaseq_nf_arg = f"--rnaseq_run_accessions     {runs}"
+        has_rnaseq    = True
     elif meta.get("taxon_id"):
         print(
-            f"No RNA-seq specified — querying ENA for taxon {meta['taxon_id']}...",
+            f"  No registry RNA-seq — querying ENA for taxon {meta['taxon_id']}...",
             file=sys.stderr,
         )
         bioproject = find_rnaseq_bioproject(meta["taxon_id"])
         if bioproject:
             n_projects = len(bioproject.split(","))
-            print(f"  Found {n_projects} project(s): {bioproject}", file=sys.stderr)
+            print(f"  Found {n_projects} ENA project(s): {bioproject}", file=sys.stderr)
             rnaseq_nf_arg = f"--rnaseq_bioproject         {bioproject}"
             has_rnaseq    = True
         else:
-            print("  [WARN] No short-read RNA-seq found in ENA — skipping RNA-seq stage.", file=sys.stderr)
+            print("  [WARN] No short-read RNA-seq found — skipping RNA-seq stage.", file=sys.stderr)
 
     # ── Resolve long-read RNA ──────────────────────────────────────────────────
+    # Priority: explicit CLI arg > transcriptome registry > ENA bioproject search
     longread_nf_arg = ""
     has_longread    = False
 
@@ -674,19 +823,27 @@ def main() -> None:
     elif args.long_read_bioproject:
         longread_nf_arg = f"--long_read_bioproject      {args.long_read_bioproject}"
         has_longread    = True
+    elif meta.get("registry_longread_runs"):
+        runs = meta["registry_longread_runs"]
+        n    = len(runs.split(","))
+        print(f"  Using {n} QC'd long-read runs from genebuild registry", file=sys.stderr)
+        # Pass individual run accessions so fetch_reads_from_ena.py downloads
+        # each run separately with the correct platform filter
+        longread_nf_arg = f"--long_read_bioproject      {runs}"
+        has_longread    = True
     elif meta.get("taxon_id"):
         print(
-            f"No long-read specified — querying ENA for taxon {meta['taxon_id']}...",
+            f"  No registry long-read — querying ENA for taxon {meta['taxon_id']}...",
             file=sys.stderr,
         )
         lr_bioproject = find_longread_bioproject(meta["taxon_id"])
         if lr_bioproject:
             n_projects = len(lr_bioproject.split(","))
-            print(f"  Found {n_projects} long-read project(s): {lr_bioproject}", file=sys.stderr)
+            print(f"  Found {n_projects} ENA long-read project(s): {lr_bioproject}", file=sys.stderr)
             longread_nf_arg = f"--long_read_bioproject      {lr_bioproject}"
             has_longread    = True
         else:
-            print("  [INFO] No long-read RNA found in ENA — skipping long-read stage.", file=sys.stderr)
+            print("  [INFO] No long-read RNA found — skipping long-read stage.", file=sys.stderr)
 
     has_genblast = bool(meta.get("uniprot_fasta") or meta.get("uniprot_taxon_id"))
 
