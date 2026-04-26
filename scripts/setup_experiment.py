@@ -199,32 +199,51 @@ def query_transcriptomic_registry(
             if row:
                 last_check = str(row["last_check"])
 
-            # Runs with acceptable mapping QC — filter by uniquely_mapped_reads_percentage
-            # where an alignment record exists.  Runs with no align record (never aligned
-            # to any assembly) are still included if their qc_status is ALIGNED.
+            # Fetch ALL qc_status=ALIGNED runs, including their best mapping rate
+            # so we can log exactly why any run is excluded.
             cur.execute(
                 """
-                SELECT DISTINCT r.run_accession, r.platform
+                SELECT DISTINCT
+                    r.run_accession,
+                    r.platform,
+                    MAX(a.uniquely_mapped_reads_percentage) AS best_mapping_pct
                 FROM run r
                 LEFT JOIN align a ON a.run_id = r.run_id
                 WHERE r.taxon_id = %s
                   AND r.qc_status = 'ALIGNED'
                   AND r.read_type = 'RNA-Seq'
-                  AND (
-                      a.align_id IS NULL
-                      OR a.uniquely_mapped_reads_percentage >= %s
-                  )
+                GROUP BY r.run_id, r.run_accession, r.platform
                 ORDER BY r.run_id
                 """,
-                (taxon_id, min_unique_mapping_pct),
+                (taxon_id,),
             )
+            rejected_runs: list[tuple[str, str, float | None]] = []
             for row in cur.fetchall():
                 acc      = row["run_accession"]
                 platform = row["platform"]
+                best_pct = row["best_mapping_pct"]  # None if no align record yet
+
+                # Accept runs with no align record (not yet mapped, assume OK)
+                # Reject runs that mapped poorly to every assembly tried
+                if best_pct is not None and best_pct < min_unique_mapping_pct:
+                    rejected_runs.append((acc, platform, best_pct))
+                    continue
+
                 if platform == "ILLUMINA":
                     rnaseq.append(acc)
                 elif platform in ("OXFORD_NANOPORE", "PACBIO_SMRT"):
                     longread.append(acc)
+
+            if rejected_runs:
+                print(
+                    f"  [REGISTRY] Excluded {len(rejected_runs)} runs "
+                    f"(best mapping < {min_unique_mapping_pct}%):",
+                    file=sys.stderr,
+                )
+                for acc, platform, pct in rejected_runs[:10]:
+                    print(f"    {acc}  {platform}  {pct:.1f}%", file=sys.stderr)
+                if len(rejected_runs) > 10:
+                    print(f"    ... and {len(rejected_runs) - 10} more", file=sys.stderr)
     except Exception as exc:
         print(f"  [WARN] Transcriptome registry query failed: {exc}", file=sys.stderr)
     finally:
@@ -338,7 +357,8 @@ def _try_import_registry():
 
 
 def resolve_metadata_from_registry(
-    gca: str, settings_file: str, outdir: str
+    gca: str, settings_file: str, outdir: str,
+    min_mapping_pct: float = 60.0,
 ) -> dict:
     """
     Query the Ensembl genebuild registry to resolve all annotation parameters
@@ -467,6 +487,7 @@ def resolve_metadata_from_registry(
         settings,
         host=os.environ.get("GBS1"),
         port=os.environ.get("GBP1"),
+        min_unique_mapping_pct=min_mapping_pct,
     )
     if txome["rnaseq"]:
         print(
@@ -692,6 +713,11 @@ def main() -> None:
         "--settings-file", default=None,
         help="JSON settings file with DB credentials (same format as ensembl-genes pipeline scripts)",
     )
+    registry_grp.add_argument(
+        "--min-mapping-pct", type=float, default=60.0,
+        help="Minimum STAR uniquely_mapped_reads_percentage for a run to pass from the "
+             "transcriptome registry (default: 60.0)",
+    )
 
     # ── Standalone overrides ───────────────────────────────────────────────────
     standalone_grp = parser.add_argument_group(
@@ -746,7 +772,8 @@ def main() -> None:
 
     # ── Resolve metadata ───────────────────────────────────────────────────────
     if args.settings_file:
-        meta = resolve_metadata_from_registry(args.gca, args.settings_file, outdir)
+        meta = resolve_metadata_from_registry(args.gca, args.settings_file, outdir,
+                                               min_mapping_pct=args.min_mapping_pct)
         # Allow CLI overrides on top of registry values
         if args.assembly_name:   meta["assembly_name"]   = args.assembly_name
         if args.taxon_id:        meta["taxon_id"]        = args.taxon_id

@@ -342,11 +342,12 @@ def score_junction_support(introns: list, junctions: dict, min_depth: int) -> tu
 
 
 # ─── Composite score ──────────────────────────────────────────────────────────
-def composite_score(structural: float, splice_pct: float, has_junctions: bool) -> float:
+def composite_score(structural: float, splice_pct: float, has_junctions: bool,
+                    struct_weight: float = 0.4, splice_weight: float = 0.6) -> float:
     if not has_junctions:
         return round(structural, 3)
     splice = splice_pct / 100.0
-    return round(0.4 * structural + 0.6 * splice, 3)
+    return round(struct_weight * structural + splice_weight * splice, 3)
 
 
 # ─── GFF3 writer with injected attributes ─────────────────────────────────────
@@ -380,17 +381,33 @@ def write_scored_gff3(raw_lines: list[str], scores: dict[str, dict], out_path: s
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--gff3",         required=True,  help="Input GFF3 to validate")
-    parser.add_argument("--genome",       required=True,  help="Softmasked genome FASTA (samtools faidx indexed)")
-    parser.add_argument("--out-gff3",     required=True,  help="Output scored GFF3")
-    parser.add_argument("--out-tsv",      required=True,  help="Output per-transcript TSV")
-    parser.add_argument("--source-label", default="unknown", help="Label for the source sub-pipeline")
-    parser.add_argument("--sj-tabs",      nargs="*", default=[], help="STAR SJ.out.tab files (0 or more)")
-    parser.add_argument("--min-depth",    type=int, default=3,
-                        help="Minimum unique-read depth to count a junction as 'supported' (default 3)")
+    parser.add_argument("--gff3",              required=True,  help="Input GFF3 to validate")
+    parser.add_argument("--genome",            required=True,  help="Softmasked genome FASTA (samtools faidx indexed)")
+    parser.add_argument("--out-gff3",          required=True,  help="Output scored GFF3")
+    parser.add_argument("--out-tsv",           required=True,  help="Output per-transcript TSV")
+    parser.add_argument("--source-label",      default="unknown", help="Label for the source sub-pipeline")
+    parser.add_argument("--sj-tabs",           nargs="*", default=[], help="STAR SJ.out.tab files (0 or more)")
+    parser.add_argument("--min-depth",         type=int,   default=3,
+                        help="Minimum unique-read depth to count a junction as 'supported'")
+    parser.add_argument("--structural-pass",   type=float, default=0.7,
+                        help="Structural score threshold for structural_ok=true flag")
+    parser.add_argument("--struct-weight",     type=float, default=0.4,
+                        help="Weight of structural score in composite validation_score")
+    parser.add_argument("--splice-weight",     type=float, default=0.6,
+                        help="Weight of splice support in composite validation_score")
+    parser.add_argument("--rejected-tsv",      default=None,
+                        help="Write rejection log TSV to this path")
     args = parser.parse_args()
 
     print(f"Validating models in {args.gff3}", file=sys.stderr)
+
+    # ── Load QC logger
+    sys.path.insert(0, str(Path(__file__).parents[3] / "lib"))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog(f"validate_models:{args.source_label}", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
 
     # ── Parse GFF3
     transcripts, raw_lines = parse_gff3(args.gff3)
@@ -404,6 +421,10 @@ def main() -> None:
         junctions = load_sj_tabs(args.sj_tabs)
         print(f"  {len(junctions)} unique junctions in pool", file=sys.stderr)
 
+    structural_pass  = args.structural_pass
+    struct_weight    = args.struct_weight
+    splice_weight    = args.splice_weight
+
     # ── Score each transcript
     score_attrs: dict[str, dict] = {}
     tsv_rows: list[dict] = []
@@ -413,7 +434,18 @@ def main() -> None:
         n_introns, n_canon, canon_pct = check_splice_sites(tx, args.genome)
         orf_complete, no_internal     = check_cds(tx, args.genome)
         struct_score = compute_structural_score(canon_pct, orf_complete, no_internal)
-        structural_ok = (struct_score > 0.7)
+        structural_ok = (struct_score > structural_pass)
+
+        # Rejection logging for structural failures
+        if qc_log and not no_internal:
+            qc_log.reject("model", tid, "internal_stop",
+                           "structural_ok", True, False)
+        elif qc_log and not orf_complete and n_introns == 0:
+            qc_log.reject("model", tid, "incomplete_orf",
+                           "structural_score_pass", structural_pass, round(struct_score, 3))
+        elif qc_log and canon_pct < 90.0 and n_introns > 0:
+            qc_log.reject("model", tid, "non_canonical_splice",
+                           "canonical_splice_pct", 90.0, round(canon_pct, 1))
 
         # Splice junction support
         splice_pct   = 100.0
@@ -421,9 +453,14 @@ def main() -> None:
         if has_junctions and n_introns > 0:
             introns   = get_intron_coords(tx)
             splice_pct, median_depth = score_junction_support(introns, junctions, args.min_depth)
+            if qc_log and splice_pct < 50.0:
+                qc_log.reject("model", tid, "low_splice_support",
+                               "min_junction_depth", args.min_depth, round(splice_pct, 1))
 
         # Composite
-        val_score = composite_score(struct_score, splice_pct, has_junctions and n_introns > 0)
+        val_score = composite_score(struct_score, splice_pct,
+                                    has_junctions and n_introns > 0,
+                                    struct_weight, splice_weight)
 
         attrs = {
             "validation_score":    str(val_score),
@@ -469,8 +506,12 @@ def main() -> None:
                 f"{row['structural_score']}\t{row['validation_score']}\n"
             )
 
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
+
     # ── Summary
-    n_ok    = sum(1 for r in tsv_rows if r["structural_score"] > 0.7)
+    n_ok    = sum(1 for r in tsv_rows if r["structural_score"] > structural_pass)
     n_total = len(tsv_rows)
     if has_junctions:
         mean_support = sum(r["splice_support_pct"] for r in tsv_rows) / n_total if n_total else 0

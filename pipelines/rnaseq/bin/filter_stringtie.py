@@ -140,13 +140,27 @@ def filter_transcripts(
     min_coverage:  float,
     min_length:    int,
     min_exons:     int,
+    qc_log=None,
+    sample:        str = "",
 ) -> List[Transcript]:
-    return [
-        tx for tx in txs
-        if tx.coverage  >= min_coverage
-        and tx.length   >= min_length
-        and tx.n_exons  >= min_exons
-    ]
+    passing = []
+    for tx in txs:
+        tid = f"{sample}::{tx.transcript_id}" if sample else tx.transcript_id
+        if tx.coverage < min_coverage:
+            if qc_log:
+                qc_log.reject("transcript", tid, "low_stringtie_coverage",
+                               "stringtie_min_coverage", min_coverage, round(tx.coverage, 3))
+        elif tx.length < min_length:
+            if qc_log:
+                qc_log.reject("transcript", tid, "short_transcript",
+                               "stringtie_min_length", min_length, tx.length)
+        elif tx.n_exons < min_exons:
+            if qc_log:
+                qc_log.reject("transcript", tid, "few_exons",
+                               "stringtie_min_exons", min_exons, tx.n_exons)
+        else:
+            passing.append(tx)
+    return passing
 
 
 # ---------------------------------------------------------------------------
@@ -203,21 +217,37 @@ def write_gff3(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--gtf',          required=True)
-    ap.add_argument('--out',          required=True)
-    ap.add_argument('--sample',       required=True)
-    ap.add_argument('--biotype',      default='rnaseq_tissue')
-    ap.add_argument('--min_coverage', type=float, default=2.0)
-    ap.add_argument('--min_length',   type=int,   default=200)
-    ap.add_argument('--min_exons',    type=int,   default=1)
+    ap.add_argument('--gtf',           required=True)
+    ap.add_argument('--out',           required=True)
+    ap.add_argument('--sample',        required=True)
+    ap.add_argument('--biotype',       default='rnaseq_tissue')
+    ap.add_argument('--min_coverage',  type=float, default=2.0)
+    ap.add_argument('--min_length',    type=int,   default=200)
+    ap.add_argument('--min_exons',     type=int,   default=1)
+    ap.add_argument('--rejected-tsv',  default=None,
+                    help='Write rejection log TSV to this path')
     args = ap.parse_args()
 
-    txs      = parse_stringtie_gtf(args.gtf)
-    passing  = filter_transcripts(txs, args.min_coverage, args.min_length, args.min_exons)
-    n        = write_gff3(passing, args.out, args.sample, args.biotype)
+    import sys as _sys
+    _sys.path.insert(0, str(__import__('pathlib').Path(__file__).parents[3] / 'lib'))
+    try:
+        from qc_log import QCLog
+        qc_log = QCLog("rnaseq_assembly", output_path=args.rejected_tsv)
+    except ImportError:
+        qc_log = None
 
-    print(f'filter_stringtie: {len(txs)} transcripts parsed, {n} passed filters',
-          file=sys.stderr)
+    txs     = parse_stringtie_gtf(args.gtf)
+    passing = filter_transcripts(txs, args.min_coverage, args.min_length, args.min_exons,
+                                  qc_log=qc_log, sample=args.sample)
+    n       = write_gff3(passing, args.out, args.sample, args.biotype)
+
+    n_rejected = len(txs) - n
+    print(f'filter_stringtie [{args.sample}]: {len(txs)} parsed → {n} passed, '
+          f'{n_rejected} rejected', file=sys.stderr)
+
+    if qc_log:
+        qc_log.print_summary()
+        qc_log.write()
 
 
 if __name__ == '__main__':
