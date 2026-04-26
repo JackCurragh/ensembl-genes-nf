@@ -30,7 +30,7 @@ process MERGE_AB_INITIO {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
     END_VERSIONS
     """
 

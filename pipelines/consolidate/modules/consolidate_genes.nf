@@ -33,12 +33,14 @@ process CONSOLIDATE_GENES {
     // Format: {"filename_pattern": priority}
     // Fallback: files not in map get priority 99
     def args = task.ext.args ?: ''
+    // NB: layer_priorities is JSON with double-quotes; must use a heredoc so the
+    // shell doesn't interpret those quotes as argument boundaries.
     """
-    python3 -c "
+    python3 - <<'PYEOF'
 import json, os, sys
 
 priority_map = json.loads('''${params.layer_priorities}''')
-files = '${gff3_files}'.split()
+files = '''${gff3_files}'''.split()
 specs = []
 for f in files:
     prio = 99
@@ -49,12 +51,13 @@ for f in files:
     specs.append(f'{f}:{prio}')
 
 cmd = 'consolidate_genes.py --inputs ' + ' '.join(specs) + ' --out consolidated.gff3'
-os.system(cmd)
-"
+rc = os.system(cmd)
+sys.exit(rc >> 8)
+PYEOF
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
     END_VERSIONS
     """
 

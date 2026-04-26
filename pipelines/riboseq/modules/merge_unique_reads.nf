@@ -45,7 +45,7 @@ process MERGE_UNIQUE_READS {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version 2>&1 | sed 's/Python //')
+        python: \$(python3 --version 2>&1 | sed 's/Python //')
         polars: \$(python -c "import polars; print(polars.__version__)")
     END_VERSIONS
     """

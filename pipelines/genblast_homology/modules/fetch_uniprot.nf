@@ -45,7 +45,7 @@ process FETCH_UNIPROT {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
         requests: \$(python -c "import requests; print(requests.__version__)")
     END_VERSIONS
     """

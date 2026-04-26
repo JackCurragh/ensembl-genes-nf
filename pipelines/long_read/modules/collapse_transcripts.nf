@@ -40,7 +40,7 @@ process COLLAPSE_TRANSCRIPTS {
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         pysam: \$(python -c "import pysam; print(pysam.__version__)")
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
     END_VERSIONS
     """
 

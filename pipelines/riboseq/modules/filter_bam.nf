@@ -39,7 +39,7 @@ process FILTER_BAM {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //g')
+        python: \$(python3 --version | sed 's/Python //g')
         pysam: \$(python -c "import pysam; print(pysam.__version__)")
     END_VERSIONS
     """

@@ -89,7 +89,7 @@ def parse_gff3(path: str, priority: int) -> List[Transcript]:
             feature = cols[2]
             attrs   = _parse_attrs(cols[8])
 
-            if feature == 'transcript':
+            if feature in ('transcript', 'mRNA'):
                 tx_id   = attrs.get('ID', '')
                 gene_id = attrs.get('Parent', attrs.get('ID', ''))
                 if tx_id:

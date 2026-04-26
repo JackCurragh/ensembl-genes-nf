@@ -79,7 +79,7 @@ process DIAMOND_BLASTP {
     "${task.process}":
         diamond: \$(diamond --version 2>&1 | head -1 | sed 's/diamond version //')
         samtools: \$(samtools --version 2>&1 | head -1 | sed 's/samtools //')
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
     END_VERSIONS
     """
 

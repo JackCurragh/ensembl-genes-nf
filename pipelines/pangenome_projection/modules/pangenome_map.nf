@@ -80,7 +80,7 @@ PG_TOOL="\${PWD}/_ensembl_genes_pg/pipelines/human_pangenome_projection"
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         minimap2: \$(minimap2 --version 2>&1)
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
         ensembl_pangenome_tool: feature/human_pangenome_mapping
     END_VERSIONS
     """

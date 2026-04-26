@@ -38,7 +38,7 @@ process BAM_TO_BED {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //g')
+        python: \$(python3 --version | sed 's/Python //g')
         pysam: \$(python -c "import pysam; print(pysam.__version__)")
         sort: \$(sort --version | sed -n 1p | sed 's/^.*sort (GNU coreutils) //g')
     END_VERSIONS

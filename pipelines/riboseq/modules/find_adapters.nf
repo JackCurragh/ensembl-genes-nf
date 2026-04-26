@@ -30,7 +30,7 @@ process FIND_ADAPTERS {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //g')
+        python: \$(python3 --version | sed 's/Python //g')
         get_adapters.py: \$(python3 $projectDir/bin/get_adapters.py --version 2>&1 | sed 's/get_adapters.py v//g')
     END_VERSIONS
     """

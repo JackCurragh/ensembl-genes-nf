@@ -37,7 +37,7 @@ process MERGE_REPEATS {
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        python: \$(python --version | sed 's/Python //')
+        python: \$(python3 --version | sed 's/Python //')
         pybedtools: \$(python -c "import pybedtools; print(pybedtools.__version__)" 2>/dev/null || echo 'unknown')
     END_VERSIONS
     """
