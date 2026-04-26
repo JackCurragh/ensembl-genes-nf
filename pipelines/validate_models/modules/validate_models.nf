@@ -27,6 +27,12 @@ process VALIDATE_MODELS {
         'https://depot.galaxyproject.org/singularity/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:afaaa4c6f5b308b4b6aa2dd8e99e1466b2a6b0cd-0' :
         'biocontainers/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:afaaa4c6f5b308b4b6aa2dd8e99e1466b2a6b0cd-0' }"
 
+    // Publish scored GFF3 and TSV so the manifest can reference stable paths
+    publishDir path: "${params.outdir}/validate_models", mode: 'copy', overwrite: true,
+               pattern: '*.scored.gff3'
+    publishDir path: "${params.outdir}/validate_models", mode: 'copy', overwrite: true,
+               pattern: '*.scores.tsv'
+
     input:
     tuple val(meta), path(gff3)         // GFF3 from any source sub-pipeline
     path genome_fasta                    // softmasked genome (must have .fai index)
