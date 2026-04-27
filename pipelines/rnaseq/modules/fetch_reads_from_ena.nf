@@ -22,7 +22,7 @@ process FETCH_READS_FROM_ENA {
     conda "conda-forge::python=3.11 conda-forge::requests=2.31"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
-        'biocontainers/python:3.11--h2ad013b_0_cp311' }"
+        'quay.io/biocontainers/python:3.11--h2ad013b_0_cp311' }"
 
     publishDir "${params.outdir}/raw_reads", mode: 'copy', pattern: "*.fastq.gz"
     publishDir "${params.outdir}",           mode: 'copy', pattern: "sample_sheet.csv"

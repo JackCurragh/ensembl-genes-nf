@@ -8,7 +8,7 @@ process STAR_INDEX {
     conda "bioconda::star=2.7.11b"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/star:2.7.11b--h43eeafb_0' :
-        'biocontainers/star:2.7.11b--h43eeafb_0' }"
+        'quay.io/biocontainers/star:2.7.11b--h43eeafb_0' }"
 
     // Building a STAR index takes 30–60 min and 30+ GB RAM. Cache it so any
     // re-run of the RNA-seq pipeline (or a second RNA-seq experiment against

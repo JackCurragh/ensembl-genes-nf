@@ -6,10 +6,10 @@ process STAR_ALIGN {
     tag "${meta.id}"
     label 'process_high'
 
-    conda "bioconda::star=2.7.11b"
-    container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
-        'https://depot.galaxyproject.org/singularity/star:2.7.11b--h43eeafb_0' :
-        'biocontainers/star:2.7.11b--h43eeafb_0' }"
+    conda "bioconda::star=2.7.11b bioconda::samtools=1.21"
+    container "${ workflow.containerEngine in ['singularity', 'apptainer'] && !task.ext.singularity_pull_docker_container ?
+        'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/26/268b4c9c6cbf8fa6606c9b7fd4fafce18bf2c931d1a809a0ce51b105ec06c89d/data' :
+        'community.wave.seqera.io/library/htslib_samtools_star_gawk:ae438e9a604351a4' }"
 
     publishDir "${params.outdir}/star_align/${meta.id}", mode: 'copy', pattern: "*.{bam,bai,tab}"
 
