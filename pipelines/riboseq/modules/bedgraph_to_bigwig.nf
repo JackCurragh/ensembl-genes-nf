@@ -5,7 +5,7 @@ process BEDGRAPH_TO_BIGWIG {
     conda "bioconda::ucsc-bedgraphtobigwig=469"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/ucsc-bedgraphtobigwig:469--h9b8f530_0' :
-        'biocontainers/ucsc-bedgraphtobigwig:469--h9b8f530_0' }"
+        'quay.io/biocontainers/ucsc-bedgraphtobigwig:469--h9b8f530_0' }"
 
     publishDir "${params.outdir}/bigwigs", mode: 'copy', pattern: "*.bw"
 

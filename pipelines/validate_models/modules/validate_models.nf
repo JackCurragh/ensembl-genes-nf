@@ -25,7 +25,7 @@ process VALIDATE_MODELS {
     conda "bioconda::samtools=1.18 conda-forge::python=3.11"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:afaaa4c6f5b308b4b6aa2dd8e99e1466b2a6b0cd-0' :
-        'biocontainers/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:afaaa4c6f5b308b4b6aa2dd8e99e1466b2a6b0cd-0' }"
+        'quay.io/biocontainers/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:afaaa4c6f5b308b4b6aa2dd8e99e1466b2a6b0cd-0' }"
 
     // Publish scored GFF3 and TSV so the manifest can reference stable paths
     publishDir path: "${params.outdir}/validate_models", mode: 'copy', overwrite: true,

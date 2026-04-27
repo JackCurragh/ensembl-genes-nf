@@ -10,7 +10,7 @@ process DETECT_READTHROUGH {
     conda "conda-forge::python=3.11 bioconda::pybedtools=0.10"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/pybedtools:0.10.0--py311h7b4e6c6_1' :
-        'biocontainers/pybedtools:0.10.0--py311h7b4e6c6_1' }"
+        'quay.io/biocontainers/pybedtools:0.10.0--py311h7b4e6c6_1' }"
 
     publishDir path: "${params.outdir}/finalise_geneset", mode: 'copy', overwrite: true,
                pattern: '*.readthrough.gff3'

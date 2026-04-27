@@ -9,7 +9,7 @@ process RED {
     conda "bioconda::red=05.2022.02"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/red:05.2022.02--h9ee0642_1' :
-        'biocontainers/red:05.2022.02--h9ee0642_1' }"
+        'quay.io/biocontainers/red:05.2022.02--h9ee0642_1' }"
 
     input:
     tuple val(meta), path(fasta)

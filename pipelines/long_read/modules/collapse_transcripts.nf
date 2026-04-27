@@ -9,7 +9,7 @@ process COLLAPSE_TRANSCRIPTS {
     conda "bioconda::pysam=0.22 conda-forge::intervaltree=3.1"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/pysam:0.22.1--py311h4e2aac4_0' :
-        'biocontainers/pysam:0.22.1--py311h4e2aac4_0' }"
+        'quay.io/biocontainers/pysam:0.22.1--py311h4e2aac4_0' }"
 
     input:
     tuple val(meta), path(bam), path(bai)

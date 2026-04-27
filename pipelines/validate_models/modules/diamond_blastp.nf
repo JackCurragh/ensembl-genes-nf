@@ -21,7 +21,7 @@ process DIAMOND_BLASTP {
     conda "bioconda::diamond=2.1.9 bioconda::samtools=1.18 conda-forge::python=3.11"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/mulled-v2-8849acf39a43cdd6c839a369a74c0adc823e2f91:ab110436faf952a33575c64dd74615a88faf32df-0' :
-        'biocontainers/mulled-v2-8849acf39a43cdd6c839a369a74c0adc823e2f91:ab110436faf952a33575c64dd74615a88faf32df-0' }"
+        'quay.io/biocontainers/mulled-v2-8849acf39a43cdd6c839a369a74c0adc823e2f91:ab110436faf952a33575c64dd74615a88faf32df-0' }"
 
     input:
     tuple val(meta), path(scored_gff3)  // GFF3 from VALIDATE_MODELS

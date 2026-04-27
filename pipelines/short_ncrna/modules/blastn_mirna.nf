@@ -9,7 +9,7 @@ process BLASTN_MIRNA {
     conda "bioconda::blast=2.15"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/blast:2.15.0--pl5321h6f7f691_1' :
-        'biocontainers/blast:2.15.0--pl5321h6f7f691_1' }"
+        'quay.io/biocontainers/blast:2.15.0--pl5321h6f7f691_1' }"
 
     input:
     tuple val(meta),  path(mirna_fasta)    // miRBase sequences (query)

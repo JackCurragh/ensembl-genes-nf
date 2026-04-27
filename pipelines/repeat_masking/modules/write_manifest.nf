@@ -6,7 +6,7 @@ process WRITE_MANIFEST {
     conda "conda-forge::python=3.11"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
-        'biocontainers/python:3.11--h2ad013b_0_cp311' }"
+        'quay.io/biocontainers/python:3.11--h2ad013b_0_cp311' }"
 
     publishDir path: "${outdir}", mode: 'copy', overwrite: true
 

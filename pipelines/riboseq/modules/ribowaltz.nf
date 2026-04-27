@@ -5,7 +5,7 @@ process RIBOWALTZ {
     conda "bioconda::bioconductor-ribowaltz=2.0"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/ribowaltz:2.0--r43hdfd78af_0' :
-        'biocontainers/ribowaltz:2.0--r43hdfd78af_0' }"
+        'quay.io/biocontainers/ribowaltz:2.0--r43hdfd78af_0' }"
 
     publishDir "${params.outdir}/ribowaltz", mode: 'copy', pattern: "*.{tsv.gz,pdf}", saveAs: { filename -> filename.endsWith('.pdf') ? "offset_plot/${filename}" : filename }
 

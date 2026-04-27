@@ -9,7 +9,7 @@ process TRF {
     conda "bioconda::trf=4.09.1"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/trf:4.09.1--hec16e2b_3' :
-        'biocontainers/trf:4.09.1--hec16e2b_3' }"
+        'quay.io/biocontainers/trf:4.09.1--hec16e2b_3' }"
 
     input:
     tuple val(meta), path(fasta)

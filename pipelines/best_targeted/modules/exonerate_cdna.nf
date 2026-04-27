@@ -9,7 +9,7 @@ process EXONERATE_CDNA {
     conda "bioconda::exonerate=2.4.0"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/exonerate:2.4.0--hd03093a_6' :
-        'biocontainers/exonerate:2.4.0--hd03093a_6' }"
+        'quay.io/biocontainers/exonerate:2.4.0--hd03093a_6' }"
 
     input:
     tuple val(meta), path(cdna_fasta)

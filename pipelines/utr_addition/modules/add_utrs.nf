@@ -12,7 +12,7 @@ process ADD_UTRS {
     conda "conda-forge::python=3.11 bioconda::pysam=0.22 bioconda::pybedtools=0.10"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/pysam:0.22.0--py311h7b4e6c6_1' :
-        'biocontainers/pysam:0.22.0--py311h7b4e6c6_1' }"
+        'quay.io/biocontainers/pysam:0.22.0--py311h7b4e6c6_1' }"
 
     publishDir path: "${params.outdir}/utr_addition", mode: 'copy', overwrite: true,
                pattern: '*.with_utrs.gff3'

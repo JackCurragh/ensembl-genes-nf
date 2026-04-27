@@ -5,7 +5,7 @@ process STAR_ALIGN {
     conda "bioconda::star=2.7.11b"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/star:2.7.11b--h43eeafb_1' :
-        'biocontainers/star:2.7.11b--h43eeafb_1' }"
+        'quay.io/biocontainers/star:2.7.11b--h43eeafb_1' }"
 
     publishDir path: "${params.outdir}/star_align", mode: 'copy', saveAs: {
         filename -> if (filename.endsWith('toTranscriptome.out.bam')) return "transcriptome_bam/$filename"

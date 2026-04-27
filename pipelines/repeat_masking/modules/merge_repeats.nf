@@ -11,7 +11,7 @@ process MERGE_REPEATS {
     conda "conda-forge::python=3.11 bioconda::pybedtools=0.10"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/pybedtools:0.10.0--py311h18e979d_0' :
-        'biocontainers/pybedtools:0.10.0--py311h18e979d_0' }"
+        'quay.io/biocontainers/pybedtools:0.10.0--py311h18e979d_0' }"
 
     input:
     tuple val(meta), path(beds)   // all BED files collected into one list

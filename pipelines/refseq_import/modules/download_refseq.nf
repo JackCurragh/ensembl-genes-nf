@@ -11,7 +11,7 @@ process DOWNLOAD_REFSEQ {
     conda "conda-forge::wget=1.21.4"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/wget:1.21.4--h2b5d971_0' :
-        'biocontainers/wget:1.21.4--h2b5d971_0' }"
+        'quay.io/biocontainers/wget:1.21.4--h2b5d971_0' }"
 
     input:
     val accession   // e.g. GCF_001857705.1

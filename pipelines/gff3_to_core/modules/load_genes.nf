@@ -4,7 +4,7 @@ process LOAD_GFF3_TO_CORE {
     conda "conda-forge::python=3.11 conda-forge::pymysql=1.1"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
-        'biocontainers/python:3.11--h2ad013b_0_cp311' }"
+        'quay.io/biocontainers/python:3.11--h2ad013b_0_cp311' }"
 
     publishDir path: "${params.outdir}/gff3_to_core", mode: 'copy', overwrite: true
 

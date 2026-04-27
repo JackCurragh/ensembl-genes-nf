@@ -5,7 +5,7 @@ process BEDTOOLS_MASKFASTA {
     conda "bioconda::bedtools=2.31"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/bedtools:2.31.1--hf5e1c6e_1' :
-        'biocontainers/bedtools:2.31.1--hf5e1c6e_1' }"
+        'quay.io/biocontainers/bedtools:2.31.1--hf5e1c6e_1' }"
 
     publishDir "${params.outdir}/genome", mode: 'copy', pattern: "*.softmasked.fa"
 

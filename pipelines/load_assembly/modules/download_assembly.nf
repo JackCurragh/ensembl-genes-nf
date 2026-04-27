@@ -10,7 +10,7 @@ process DOWNLOAD_ASSEMBLY {
     conda "conda-forge::wget=1.21.4"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/wget:1.21.4--h2b5d971_0' :
-        'biocontainers/wget:1.21.4--h2b5d971_0' }"
+        'quay.io/biocontainers/wget:1.21.4--h2b5d971_0' }"
 
     // Genome FASTA is stable for a given accession — no need to re-download.
     // Avoids repeated NCBI FTP hits and protects against transient network failures

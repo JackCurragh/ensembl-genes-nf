@@ -9,7 +9,7 @@ process CMSEARCH {
     conda "bioconda::infernal=1.1.5"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/infernal:1.1.5--pl5321hece9b99_0' :
-        'biocontainers/infernal:1.1.5--pl5321hece9b99_0' }"
+        'quay.io/biocontainers/infernal:1.1.5--pl5321hece9b99_0' }"
 
     input:
     tuple val(meta), path(cmfile), path(seqdb)

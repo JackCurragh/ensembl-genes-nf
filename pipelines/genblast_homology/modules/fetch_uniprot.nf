@@ -16,7 +16,7 @@ process FETCH_UNIPROT {
     conda "conda-forge::python=3.11 conda-forge::requests=2.31"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/python:3.11--h2ad013b_0_cp311' :
-        'biocontainers/python:3.11--h2ad013b_0_cp311' }"
+        'quay.io/biocontainers/python:3.11--h2ad013b_0_cp311' }"
 
     // UniProt proteins are clade-level (one FASTA per taxon ID) and can be shared
     // across assemblies of the same clade. Override params.uniprot_store_dir to a

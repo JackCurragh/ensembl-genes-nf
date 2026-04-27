@@ -9,7 +9,7 @@ process GENBLAST {
     conda "bioconda::genblast=1.0.4"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/genblast:1.0.4--h9f5acd7_3' :
-        'biocontainers/genblast:1.0.4--h9f5acd7_3' }"
+        'quay.io/biocontainers/genblast:1.0.4--h9f5acd7_3' }"
 
     input:
     tuple val(meta), path(proteins)

@@ -5,7 +5,7 @@ process REPEATMASKER_REPEATMASKER {
     conda "bioconda::repeatmasker=4.1.5"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/repeatmasker:4.1.5--pl5321hdfd78af_1' :
-        'biocontainers/repeatmasker:4.1.5--pl5321hdfd78af_1' }"
+        'quay.io/biocontainers/repeatmasker:4.1.5--pl5321hdfd78af_1' }"
 
     // Each genome chunk runs as a separate invocation; outputs (*.out, *.masked, etc.)
     // are named by meta.id so all chunks share one store dir without collision.

@@ -5,7 +5,7 @@ process FASTQ_DL {
     conda "bioconda::fastq-dl=2.0.1"
     container "${ workflow.containerEngine == 'singularity' && !task.ext.singularity_pull_docker_container ?
         'https://depot.galaxyproject.org/singularity/fastq-dl:2.0.1--pyhdfd78af_0' :
-        'biocontainers/fastq-dl:2.0.1--pyhdfd78af_0' }"
+        'quay.io/biocontainers/fastq-dl:2.0.1--pyhdfd78af_0' }"
 
     publishDir "${params.outdir}/fastq", mode: 'copy', pattern: '*.fastq.gz'
 
