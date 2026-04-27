@@ -43,51 +43,93 @@ from datetime import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# HPC path constants
-# Items marked [CHECK] need verifying on each cluster before the first run.
+# Reference data registry
+# Paths are no longer hardcoded here — they live in the versioned manifests
+# under <ref-data-repo>/manifests/ and are resolved at runtime by RefDataRegistry.
+# To add a new site or update a path, edit the relevant manifest YAML and
+# bump current_version.  Run `ref-data validate` to confirm paths exist.
+# Run `ref-data check-updates` to detect new upstream versions.
 # ---------------------------------------------------------------------------
 
-# Base directory for IGTR FASTA files (filenames come from clade_settings.json)
-IGTR_BASE_DIR = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ig_tr_proteins"  # [CHECK]
+def _load_refdata_registry(ref_data_dir: str | Path | None, site: str):
+    """
+    Import and return a RefDataRegistry.  Falls back gracefully if the
+    ensembl-refdata package is not installed.
+    """
+    # Allow the ref-data repo to be passed explicitly or discovered as a
+    # sibling directory of this script's repo.
+    if ref_data_dir is None:
+        # <repo>/scripts/setup_experiment.py → try sibling ref-data/
+        script_dir = Path(__file__).resolve().parent.parent
+        candidate = script_dir.parent / "ref-data"
+        ref_data_dir = candidate if candidate.is_dir() else None
 
-# Selenoprotein FASTA used by the finalise stage
-SELENOPROTEIN_FASTA = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/selenoproteins/selenoproteins.fa"  # [CHECK]
+    if ref_data_dir is not None:
+        ref_data_src = Path(ref_data_dir) / "src"
+        if ref_data_src.is_dir() and str(ref_data_src) not in sys.path:
+            sys.path.insert(0, str(ref_data_src))
 
-# Rfam covariance model file — used by cmsearch in the short_ncrna stage
-RFAM_CM = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ncrna/Rfam_14.1/Rfam.cm"  # [CHECK]
+    try:
+        from refdata.registry import RefDataRegistry
+        manifests_dir = Path(ref_data_dir) / "manifests" if ref_data_dir else None
+        kwargs = {"site": site}
+        if manifests_dir and manifests_dir.is_dir():
+            kwargs["manifests_dir"] = manifests_dir
+        return RefDataRegistry(**kwargs)
+    except ImportError:
+        return None
 
-# miRNA FASTA — blasted against softmasked genome in short_ncrna
-MIRNA_FASTA = "/hps/nobackup/flicek/ensembl/genebuild/blastdb/ncrna/mirBase/all_mirnas.fa"  # [CHECK]
 
-# Projection source genomes and annotations.
-# Keys are production_name values from clade_settings.json
-# (projection_source_production_name field).
-# Each entry needs:
-#   fasta — softmasked genome FASTA of the reference species
-#   gff3  — canonical gene annotation GFF3 of the reference species
-# These files must be pre-generated and available on shared storage.
-# Generate the GFF3 with:
-#   python ensembl-genes/scripts/export_gff3_from_core.py \
-#       --host $GBS5 --port $GBP5 --dbname mus_musculus_core_114_39 \
-#       --out mus_musculus.gff3
-PROJECTION_SOURCES: dict[str, dict] = {
-    "homo_sapiens": {
-        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/homo_sapiens/GRCh38.softmasked.fa",  # [CHECK]
-        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/homo_sapiens/homo_sapiens.gff3",     # [CHECK]
-    },
-    "mus_musculus": {
-        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/mus_musculus/GRCm39.softmasked.fa",  # [CHECK]
-        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/mus_musculus/mus_musculus.gff3",     # [CHECK]
-    },
-    "danio_rerio": {
-        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/danio_rerio/GRCz11.softmasked.fa",   # [CHECK]
-        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/danio_rerio/danio_rerio.gff3",       # [CHECK]
-    },
-    "gallus_gallus": {
-        "fasta": "/nfs/production/flicek/ensembl/genebuild/projection_sources/gallus_gallus/bGalGal1.softmasked.fa",  # [CHECK]
-        "gff3":  "/nfs/production/flicek/ensembl/genebuild/projection_sources/gallus_gallus/gallus_gallus.gff3",      # [CHECK]
-    },
-}
+def _resolve_ref_paths(registry, site: str) -> dict:
+    """
+    Resolve all global reference paths from the registry.
+    Returns a dict with the same keys previously held by the module-level constants.
+    Falls back to None values if the registry is unavailable (will cause an error
+    later when the relevant pipeline stage is actually needed).
+    """
+    if registry is None:
+        print(
+            "[WARN] ensembl-refdata package not available. "
+            "Reference paths will be unresolved. "
+            "Install with: pip install -e <ref-data-repo>",
+            file=sys.stderr,
+        )
+        return {
+            "rfam_cm": None,
+            "mirna_fasta": None,
+            "selenoprotein_fasta": None,
+            "igtr_base_dir": None,
+            "projection_sources": {},
+        }
+
+    def _safe_get(name: str, key: str | None = None):
+        try:
+            info = registry.get(name)
+            loc = info["location"]
+            if key:
+                return loc.get(key)
+            return loc.get("path") or loc.get("base_dir")
+        except Exception as exc:
+            print(f"[WARN] Could not resolve '{name}' from ref-data registry: {exc}", file=sys.stderr)
+            return None
+
+    # Projection sources — keyed by species production name
+    projection_sources: dict[str, dict] = {}
+    for species in ("homo_sapiens", "mus_musculus", "danio_rerio", "gallus_gallus"):
+        manifest_name = f"projection_{species}"
+        try:
+            loc = registry.get(manifest_name)["location"]
+            projection_sources[species] = {"fasta": loc["fasta"], "gff3": loc["gff3"]}
+        except Exception as exc:
+            print(f"[WARN] Could not resolve projection source for {species}: {exc}", file=sys.stderr)
+
+    return {
+        "rfam_cm":              _safe_get("rfam_cm"),
+        "mirna_fasta":          _safe_get("mirna"),
+        "selenoprotein_fasta":  _safe_get("selenoproteins"),
+        "igtr_base_dir":        _safe_get("igtr"),
+        "projection_sources":   projection_sources,
+    }
 
 # ---------------------------------------------------------------------------
 # Augustus species models — closest available trained model per taxon/clade
@@ -759,16 +801,31 @@ def main() -> None:
                         help="Taxon ID → auto-fetch from UniProt (overrides registry)")
 
     # ── Infrastructure ────────────────────────────────────────────────────────
-    parser.add_argument("--nf-work-root", default=None,  help="NF work dir (default: outdir/.nf_work)")
-    parser.add_argument("--repo-dir",     default=".",   help="Path to ensembl-genes-nf repo")
-    parser.add_argument("--profile",      default="cluster", help="Nextflow profile")
-    parser.add_argument("--output-script",default=None,  help="Output .sh path (default: run_<assembly>.sh)")
+    parser.add_argument("--nf-work-root",  default=None,  help="NF work dir (default: outdir/.nf_work)")
+    parser.add_argument("--repo-dir",      default=".",   help="Path to ensembl-genes-nf repo")
+    parser.add_argument("--profile",       default="cluster", help="Nextflow profile")
+    parser.add_argument("--output-script", default=None,  help="Output .sh path (default: run_<assembly>.sh)")
+    parser.add_argument("--ref-data-dir",  default=None,
+                        help="Path to the ensembl-refdata repo (default: auto-discover sibling dir)")
+    parser.add_argument("--site",          default="hpc_ebi",
+                        help="Site name for ref-data path resolution (default: hpc_ebi)")
 
     args = parser.parse_args()
 
     outdir       = args.outdir.rstrip("/")
     nf_work_root = args.nf_work_root or f"{outdir}/.nf_work"
     repo_dir     = str(Path(args.repo_dir).resolve())
+
+    # ── Load reference data registry ──────────────────────────────────────────
+    _ref_registry = _load_refdata_registry(args.ref_data_dir, args.site)
+    _ref_paths    = _resolve_ref_paths(_ref_registry, args.site)
+
+    # Make resolved paths available as module-level-like names for the rest of main()
+    IGTR_BASE_DIR       = _ref_paths["igtr_base_dir"]
+    SELENOPROTEIN_FASTA = _ref_paths["selenoprotein_fasta"]
+    RFAM_CM             = _ref_paths["rfam_cm"]
+    MIRNA_FASTA         = _ref_paths["mirna_fasta"]
+    PROJECTION_SOURCES  = _ref_paths["projection_sources"]
 
     # ── Resolve metadata ───────────────────────────────────────────────────────
     if args.settings_file:
@@ -922,6 +979,19 @@ fi
 
     Path(script_path).write_text(script_content)
     os.chmod(script_path, 0o755)
+
+    # ── Write reference data provenance snapshot ───────────────────────────────
+    if _ref_registry is not None:
+        try:
+            from refdata.snapshot import capture_snapshot
+            snap_path = capture_snapshot(
+                run_id=args.gca,
+                outdir=Path(outdir),
+                registry=_ref_registry,
+            )
+            print(f"  Reference snapshot : {snap_path}", file=sys.stderr)
+        except Exception as exc:
+            print(f"[WARN] Could not write reference snapshot: {exc}", file=sys.stderr)
 
     # ── Write Prefect migration stub ───────────────────────────────────────────
     prefect_path = f"prefect_params_{assembly_name}.json"
